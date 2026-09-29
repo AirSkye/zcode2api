@@ -130,15 +130,20 @@ client → 鉴权 → [循环: attempt ≤ MAX_ACCOUNT_ATTEMPTS=5]
 ### 4.4 活动领取
 
 ```
-入池（Web/CLI）或后台「领取」：
-  JWT 且 allows_billing → GET billing/preview（Bearer JWT + 每账号 X-Device-Mid）
+入池（Web/CLI）、后台「领取」或周期领取轮（ClaimRoundManager，
+claim_round_interval 默认 600s，meta 表可改，0 = 关）：
+  JWT 且 allows_billing → 激活上报 → GET billing/preview（Bearer JWT + 每账号 X-Device-Mid）
   ├─ 无可领套餐 → 结束
   ├─ 有可领 → 取验证码 verifyParam → POST billing/claim
-  │    ├─ 1003 已领取 / 1002 结束 / 1005 名额用完 → 记失败文案
+  │    ├─ 1003 已领取 / 1002 结束 → 记失败文案
+  │    ├─ 1005 名额用完 → 记 next_at（data.plan.ends_at × 1000）；
+  │    │     领取轮按 next_at 退避：等待期该套餐跳过领取（preview 照常
+  │    │     保新套餐发现，不耗验证码），next_at 过后自动恢复重试
   │    ├─ 3007 验证码失败 → 换码重试一次
   │    └─ 401 → 标 INVALID
   └─ 领取成功 → 刷新额度
-无独立 ClaimScheduler 轮询；纯 API Key 账号跳过领取。
+退避记忆仅轮次路径使用；入池/手动领取总是全量尝试（1003 幂等）。
+纯 API Key 账号跳过领取；轮任务停服有截止（STOP_GRACE_SECONDS 超时即 cancel）。
 ```
 
 ### 4.5 凭证进入池内的路径

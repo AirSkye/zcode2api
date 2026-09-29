@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 
 import httpx
 
@@ -192,11 +193,13 @@ async def report_activation_events(account: Account) -> str | None:
     return None
 
 
-async def auto_claim_all_plans(account: Account) -> list[dict]:
+async def auto_claim_all_plans(account: Account, *, skip_plan_ids: set[str] | None = None) -> list[dict]:
     """新账号入池自动领取：激活上报 + 逐个领取全部可领套餐。
 
     入池链路的 fire-and-forget 收尾：任何失败只记日志/返回 outcome，绝不抛出
     （入池流程不受影响）。重复执行安全（上游 1003 已领取过幂等）。
+    skip_plan_ids：本轮跳过领取的套餐 id（1005 名额等待期由 ClaimRoundManager
+    记忆传入）；preview 仍照常执行，新套餐发现不受影响。
     """
     if not (account.mode == "jwt" and account.jwt_token):
         return []
@@ -222,7 +225,12 @@ async def auto_claim_all_plans(account: Account) -> list[dict]:
         logs.info("claim", f"账号 {account.name} 上游无投放套餐，跳过领取")
         return outcomes
 
+    skip = skip_plan_ids or set()
+    skipped = 0
     for plan in plans:
+        if plan["plan_id"] in skip:
+            skipped += 1
+            continue
         try:
             result = await claim(account, plan["plan_id"])
             outcomes.append({"account_id": account.id, "account_name": account.name,
@@ -240,6 +248,10 @@ async def auto_claim_all_plans(account: Account) -> list[dict]:
             logs.warn("claim", f"账号 {account.name} 自动领取 {plan['plan_id']} 失败: {err}")
         except Exception as err:  # noqa: BLE001
             logs.warn("claim", f"账号 {account.name} 自动领取异常: {err}")
+            outcomes.append({"account_id": account.id, "account_name": account.name,
+                             "ok": False, "plan_id": plan["plan_id"], "message": str(err)})
+    if skipped:
+        logs.info("claim", f"账号 {account.name} {skipped} 个套餐名额等待期，本轮跳过领取")
     return outcomes
 
 
@@ -395,13 +407,22 @@ class ClaimRoundManager:
     每轮对全部可打 billing 的 JWT 账号执行 auto_claim_all_plans（激活上报 +
     preview + 逐个领取全部可领套餐）；冷却/停用/风控禁用/失效账号由
     allows_billing() 先行过滤，保证「冷却期零上游 billing 流量」不变量。
+    1005（今日名额用完）按服务端 next_at 退避：等待期该套餐不打 claim
+    （省 captcha 求解与上游写流量），preview 照常保留新套餐发现
+    （docs/development/05「按服务端 next window 退避」语义落地）。
     轮间隔运行期读 meta 设置（0 = 关闭，仍周期回看便于随时启用）；
     单账号异常不中断整轮，后台任务异常全部自兜。
     """
 
+    # 停服截止：轮内长尾（验证码求解重试可达分钟级）超时即 cancel，
+    # uvicorn lifespan 关闭保持有界，不被半途的求解卡成 SIGKILL 脏停机
+    STOP_GRACE_SECONDS = 10
+
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        # 账号 → {plan_id: 名额恢复时间(ms)}：1005 退避记忆（仅轮次路径使用）
+        self._claim_holds: dict[str, dict[str, int]] = {}
 
     async def _round(self) -> None:
         from .quota import refresh_accounts
@@ -413,13 +434,41 @@ class ClaimRoundManager:
         ]
         if not accounts:
             return
+        now_ms = time.time() * 1000
+        # 退避表先清过期项（next_at 已过的恢复本轮重试）
+        holds = {
+            aid: {pid: at for pid, at in pl.items() if at > now_ms}
+            for aid, pl in self._claim_holds.items()
+        }
+        self._claim_holds = holds
         claimed = 0
         for acc in accounts:
+            acc_holds = holds.get(acc.id, {})
+            if acc_holds:
+                soon = max(0, (min(acc_holds.values()) - now_ms) / 1000)
+                logs.info("claim", f"账号 {acc.name} {len(acc_holds)} 个套餐名额等待中"
+                                   f"（约 {int(soon)}s 后恢复重试）")
             try:
-                outcomes = await auto_claim_all_plans(acc)
+                outcomes = await auto_claim_all_plans(acc, skip_plan_ids=set(acc_holds))
             except Exception as err:  # noqa: BLE001 - 单账号异常不中断整轮
                 logs.warn("claim", f"轮次领取 账号 {acc.name} 异常: {err}")
                 continue
+            # 按本轮实绩更新退避表：1005+next_at 记忆；成功/其余失败清除
+            # （被跳过的套餐无 outcome，等待自然延续到 next_at）
+            updated = dict(acc_holds)
+            for o in outcomes:
+                pid = o.get("plan_id")
+                if not pid:
+                    continue
+                next_at = o.get("next_at") if o.get("code") == 1005 else None
+                if next_at:
+                    updated[pid] = int(next_at)
+                else:
+                    updated.pop(pid, None)
+            if updated:
+                holds[acc.id] = updated
+            else:
+                holds.pop(acc.id, None)
             if not any(o.get("ok") for o in outcomes):
                 continue
             claimed += 1
@@ -463,10 +512,21 @@ class ClaimRoundManager:
             self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        """停止后台轮：事件置位后有截止地等待；超时即 cancel 轮任务。
+
+        轮内正在跑的验证码求解/上游请求长尾（求解重试可达分钟级）不允许
+        卡住 lifespan 关闭——到期 cancel，收尾即返回。
+        """
         self._stop.set()
-        if self._task:
-            await asyncio.gather(self._task, return_exceptions=True)
-            self._task = None
+        if self._task is None:
+            return
+        try:
+            await asyncio.wait_for(self._task, timeout=self.STOP_GRACE_SECONDS)
+        except TimeoutError:
+            pass  # wait_for 已在截止时 cancel 并等待收尾
+        except Exception as err:  # noqa: BLE001 - _loop 自兜；此处留痕防停服冒泡
+            logs.err("claim", f"领取轮任务异常退出: {err}")
+        self._task = None
 
 
 claim_round = ClaimRoundManager()
