@@ -84,6 +84,10 @@ RETRY_5XX_WAIT = _int("ZCODE_RETRY_5XX_WAIT", 5)         # 5xx 重试等待秒�
 COOLING_SECONDS = _int("ZCODE_COOLING_SECONDS", 300)
 # 单账号并发上限（0 = 不限）。默认 2；运行期可在后台设置改（meta 表即时生效）
 ACCOUNT_CONCURRENCY = _int("ZCODE_ACCOUNT_CONCURRENCY", 2)
+# 套餐自动领取轮间隔（秒）：周期对全部可打 billing 的 JWT 账号轮一遍
+# 激活上报 + preview + 领取（对齐 zcode-switch 10 分钟轮次）。0 = 关闭轮次，
+# 仅入池/手动触发。运行期可在后台设置改（meta 表即时生效）
+CLAIM_ROUND_INTERVAL = _int("ZCODE_CLAIM_ROUND_INTERVAL", 600)
 
 # ── 上游端点 ─────────────────────────────────────────────────────────────────
 # 上游端点：默认值统一收口在 constants.py，环境变量仅作覆盖
@@ -103,7 +107,7 @@ OAUTH_API_BASE = os.getenv("ZCODE_OAUTH_API_BASE", constants.ZCODE_ORIGIN + "/ap
 ZAI_EXCHANGE_ORIGIN = os.getenv("ZCODE_EXCHANGE_ORIGIN", constants.ZAI_API_ORIGIN)
 
 USER_AGENT = os.getenv("UPSTREAM_USER_AGENT", constants.USER_AGENT)
-APP_VERSION = "2.5.11"
+APP_VERSION = "2.6.0"
 
 _FRONTEND_VERSION_FILE = FRONTEND_DIR / "version"
 

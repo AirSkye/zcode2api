@@ -582,7 +582,11 @@ async function refreshAll(){
 /* ── 额度领取 ── */
 function claimToast(o){
   if(o.ok)showToast(`「${o.account_name}」已领取「${o.plan_name||o.plan_id}」`,'success');
-  else showToast(`「${o.account_name}」领取失败：${o.message||'未知错误'}`,'error');
+  else{
+    let msg=o.message||'未知错误';
+    if(o.next_at)msg+='（名额约 '+fmtDur((o.next_at-Date.now())/1000)+' 后恢复）';
+    showToast(`「${o.account_name}」领取失败：${msg}`,'error');
+  }
 }
 async function claimOne(id){
   if(claiming.has(id))return;

@@ -269,6 +269,15 @@ async def login_poll(flow_id: str):
         logs.warn("oauth", f"poll {flow_id} 上游 HTTP {code}")
         if 400 <= code < 500:
             _login_flows.pop(flow_id, None)
+            # 3004（官方 poll 4xx 承载的会话过期）：明确映射 expired 让前端提示
+            # 重新生成链接，不再归为 failed（zcode-switch poll 3004 语义同形）
+            try:
+                body_code = (err.response.json() or {}).get("code")
+            except ValueError:
+                body_code = None
+            if body_code == 3004:
+                logs.info("oauth", f"授权会话过期 flow_id={flow_id}（上游 3004）")
+                return {"status": "expired", "message": "授权会话已过期，请重新生成授权链接"}
             return {"status": "failed", "message": f"上游拒绝轮询（HTTP {code}）"}
         return {"status": "pending"}
     except Exception as err:  # noqa: BLE001 - 单次网络抖动按 pending 处理
@@ -473,8 +482,13 @@ async def claim(payload: dict = Body(default=None)):
             result = await do_claim(acc, plan_id)
         except ClaimError as err:
             logs.warn("claim", f"账号 {acc.name} 领取失败: {err}")
-            outcomes.append({"account_id": acc.id, "account_name": acc.name,
-                             "ok": False, "message": str(err)})
+            outcome = {"account_id": acc.id, "account_name": acc.name,
+                       "ok": False, "message": str(err)}
+            if err.code != -1:
+                outcome["code"] = err.code
+            if err.next_at:
+                outcome["next_at"] = err.next_at
+            outcomes.append(outcome)
             continue
         except CaptchaSolveError as err:
             # 验证码求解失败（get_verify_param）：明确业务回执而非裸 500
@@ -566,6 +580,7 @@ async def get_settings():
         "gateway_key_masked": _mask_secret(gateway_key),
         "quota_refresh_interval": store.quota_refresh_interval(),
         "account_concurrency": store.account_concurrency(),
+        "claim_round_interval": store.claim_round_interval(),
     }
 
 
@@ -597,6 +612,12 @@ async def update_settings(payload: dict = Body(...)):
         except (TypeError, ValueError):
             raise HTTPException(400, "账号并发必须是非负整数（0 = 不限）") from None
         store.set_setting("account_concurrency", str(concurrency))
+    if "claim_round_interval" in payload:
+        try:
+            interval = max(0, int(payload["claim_round_interval"]))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "自动领取轮间隔必须是非负整数（0 = 关闭）") from None
+        store.set_setting("claim_round_interval", str(interval))
     return {"ok": True}
 
 

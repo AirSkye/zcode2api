@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
@@ -23,7 +24,16 @@ from .models import Account, Status
 
 
 class ClaimError(Exception):
-    """业务失败（含上游 code 语义），message 面向用户。"""
+    """业务失败（含上游 code 语义），message 面向用户。
+
+    next_at 仅 1005（名额用完）携带：上游 data.plan.ends_at（秒 → 毫秒），
+    即名额恢复时间（zcode-switch claim.rs claim_error 同形）。
+    """
+
+    def __init__(self, message: str, *, code: int = -1, next_at: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.next_at = next_at
 
 
 AUTH_EXPIRED_MESSAGE = "凭证失效，请重新授权"
@@ -68,10 +78,17 @@ def _mark_auth_failure(account: Account) -> None:
     account.last_error = live.last_error
 
 
-def _fail_message(code: int, body: dict) -> str:
+def _fail_error(code: int, body: dict) -> ClaimError:
+    """业务码 → ClaimError；1005 附带名额恢复时间（data.plan.ends_at 秒 → 毫秒）。"""
     base = _CLAIM_FAIL.get(code, "领取失败")
     server = body.get("msg") or body.get("message") or ""
-    return f"{base}（{server}）" if server else base
+    message = f"{base}（{server}）" if server else base
+    next_at = None
+    if code == 1005:
+        ends = ((body.get("data") or {}).get("plan") or {}).get("ends_at")
+        if isinstance(ends, (int, float)) and ends > 0:
+            next_at = int(ends * 1000)
+    return ClaimError(message, code=code, next_at=next_at)
 
 
 def _business_code(body: dict) -> int:
@@ -213,8 +230,13 @@ async def auto_claim_all_plans(account: Account) -> list[dict]:
             logs.ok("claim", f"账号 {account.name} 自动领取成功: "
                              f"{result.get('plan_name') or plan['plan_id']}")
         except ClaimError as err:
-            outcomes.append({"account_id": account.id, "account_name": account.name,
-                             "ok": False, "plan_id": plan["plan_id"], "message": str(err)})
+            outcome = {"account_id": account.id, "account_name": account.name,
+                       "ok": False, "plan_id": plan["plan_id"], "message": str(err)}
+            if err.code != -1:
+                outcome["code"] = err.code
+            if err.next_at:
+                outcome["next_at"] = err.next_at
+            outcomes.append(outcome)
             logs.warn("claim", f"账号 {account.name} 自动领取 {plan['plan_id']} 失败: {err}")
         except Exception as err:  # noqa: BLE001
             logs.warn("claim", f"账号 {account.name} 自动领取异常: {err}")
@@ -239,7 +261,7 @@ async def preview_plans(account: Account) -> list[dict]:
     )
     code = _business_code(body)
     if code != 0:
-        raise ClaimError(_fail_message(code, body))
+        raise _fail_error(code, body)
     raw_plans = (body.get("data") or {}).get("plans") or []
     plans = [parsed for parsed in (parse_plan(p) for p in raw_plans) if parsed]
     plans.sort(key=lambda p: (-p["priority"], p["plan_id"]))
@@ -282,8 +304,30 @@ async def _post_claim(account: Account, headers: dict, plan_id: str) -> dict:
     )
     code = _business_code(body)
     if code != 0:
-        raise ClaimError(_fail_message(code, body))
+        raise _fail_error(code, body)
     return body
+
+
+def _claim_outcome(body: dict, plan_id: str, plan_name: str, grants: list) -> dict:
+    """领取成功返回集；server_time/starts_at/ends_at 为上游秒值 → 毫秒
+    （zcode-switch 3.11.2 领取语义：服务端时钟随成功载荷下发，供前端
+    区分本机时钟漂移）。缺失字段保持 None，不造数。"""
+    data = body.get("data") or {}
+    plan = data.get("plan") or {}
+
+    def _ms(key: str) -> int | None:
+        val = plan.get(key)
+        return int(val * 1000) if isinstance(val, (int, float)) and val > 0 else None
+
+    server_time = data.get("server_time")
+    return {
+        "plan_id": plan_id,
+        "plan_name": plan_name,
+        "grants": grants,
+        "starts_at": _ms("starts_at"),
+        "ends_at": _ms("ends_at"),
+        "server_time": int(server_time * 1000) if isinstance(server_time, (int, float)) and server_time > 0 else None,
+    }
 
 
 async def claim_with_captcha(
@@ -306,14 +350,15 @@ async def claim_with_captcha(
 
     plan_id, plan_name, grants = await _auto_pick_plan(account, plan_id or None)
     headers = _claim_headers(account, verify_param.strip(), region)
-    await _post_claim(account, headers, plan_id)
-    return {"plan_id": plan_id, "plan_name": plan_name, "grants": grants}
+    body = await _post_claim(account, headers, plan_id)
+    return _claim_outcome(body, plan_id, plan_name, grants)
 
 
 async def claim(account: Account, plan_id: str | None = None) -> dict:
     """领取套餐。plan_id 缺省时自动选优先级最高的可领套餐。
 
-    返回 {"plan_id", "plan_name", "grants"}；3007（验证码失败）自动换码重试一次。
+    返回 _claim_outcome 形态（含 server_time/starts_at/ends_at，可能为 None）；
+    3007（验证码失败）自动换码重试一次；1005 携带 next_at（名额恢复时间）。
     """
     if not (account.mode == "jwt" and account.jwt_token):
         raise ClaimError("仅 Coding Plan (JWT) 账号支持领取")
@@ -334,11 +379,94 @@ async def claim(account: Account, plan_id: str | None = None) -> dict:
         )
         code = _business_code(body)
         if code == 0:
-            return {"plan_id": plan_id, "plan_name": plan_name, "grants": grants}
+            return _claim_outcome(body, plan_id, plan_name, grants)
         if code == 3007 and attempt == 1:
             logs.warn("claim", f"账号 {account.name} 验证码被拒，换码重试")
             captcha_manager.invalidate()
-            last_err = ClaimError(_fail_message(code, body))
+            last_err = _fail_error(code, body)
             continue
-        raise ClaimError(_fail_message(code, body))
+        raise _fail_error(code, body)
     raise last_err or ClaimError("领取失败")
+
+
+class ClaimRoundManager:
+    """后台周期自动领取轮（对齐 zcode-switch 10 分钟轮次语义）。
+
+    每轮对全部可打 billing 的 JWT 账号执行 auto_claim_all_plans（激活上报 +
+    preview + 逐个领取全部可领套餐）；冷却/停用/风控禁用/失效账号由
+    allows_billing() 先行过滤，保证「冷却期零上游 billing 流量」不变量。
+    轮间隔运行期读 meta 设置（0 = 关闭，仍周期回看便于随时启用）；
+    单账号异常不中断整轮，后台任务异常全部自兜。
+    """
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task | None = None
+        self._stop = asyncio.Event()
+
+    async def _round(self) -> None:
+        from .quota import refresh_accounts
+        from .store import store
+
+        accounts = [
+            a for a in store.list_accounts("zai")
+            if a.mode == "jwt" and a.allows_billing()
+        ]
+        if not accounts:
+            return
+        claimed = 0
+        for acc in accounts:
+            try:
+                outcomes = await auto_claim_all_plans(acc)
+            except Exception as err:  # noqa: BLE001 - 单账号异常不中断整轮
+                logs.warn("claim", f"轮次领取 账号 {acc.name} 异常: {err}")
+                continue
+            if not any(o.get("ok") for o in outcomes):
+                continue
+            claimed += 1
+            live = store.find("zai", acc.id)
+            if live is not None:
+                try:
+                    await refresh_accounts([live])  # 领到额度立即反映到 UI
+                except Exception as err:  # noqa: BLE001
+                    logs.warn("claim", f"轮次领取 账号 {acc.name} 额度刷新失败: {err}")
+        if claimed:
+            logs.ok("claim", f"自动领取轮完成: {claimed} 个账号有新套餐入账")
+
+    async def _loop(self) -> None:
+        from .store import store
+
+        # 启动先等一段（避开启动安装序 / 入池自动领取的首次流量高峰）
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=30)
+            return
+        except TimeoutError:
+            pass
+
+        while not self._stop.is_set():
+            interval = store.claim_round_interval()  # 实时读取设置，改后即生效
+            if interval > 0:
+                try:
+                    await self._round()
+                except Exception as err:  # noqa: BLE001 - 后台任务需吞掉异常继续运行
+                    logs.err("claim", f"自动领取轮出错: {err}")
+            # interval<=0 视为关闭：仍周期性回看设置，便于随时启用
+            wait = interval if interval > 0 else 30
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=wait)
+                return
+            except TimeoutError:
+                continue
+
+    def start(self) -> None:
+        if self._task is None:
+            self._stop.clear()
+            self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task:
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
+
+
+claim_round = ClaimRoundManager()

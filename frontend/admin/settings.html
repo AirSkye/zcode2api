@@ -41,6 +41,11 @@
       <div class="hint">每个账号同时处理的最大请求数；某账号并发满时自动切下一个账号。设为 0 不限制。修改后即时生效。</div>
       <input class="input" id="account-concurrency" type="number" min="0" step="1" placeholder="2">
     </div>
+    <div class="settings-row">
+      <label>套餐自动领取轮（秒）</label>
+      <div class="hint">周期对全部 JWT 账号执行活动套餐领取（激活上报 + 查询 + 领取）。设为 0 关闭轮次，仅入池/手动触发。默认 600（10 分钟）。修改后即时生效。</div>
+      <input class="input" id="claim-round-interval" type="number" min="0" step="30" placeholder="600">
+    </div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
       <button onclick="saveSettings()" class="dialog-btn dialog-btn-primary">保存</button>
     </div>
@@ -76,6 +81,7 @@ async function load(){
     document.getElementById('gateway-key').value=d.gateway_key_masked||'';
     document.getElementById('quota-interval').value=d.quota_refresh_interval??60;
     document.getElementById('account-concurrency').value=d.account_concurrency??2;
+    document.getElementById('claim-round-interval').value=d.claim_round_interval??600;
     const hint=document.getElementById('admin-key-default-hint');
     if(hint) hint.style.display=d.admin_key_is_default?'block':'none';
   }catch(e){showToast('加载失败: '+e.message,'error');}
@@ -93,7 +99,9 @@ async function saveSettings(){
   if(!admin_key)return showToast('后台密码不能为空','error');
   if(isNaN(quota_refresh_interval)||quota_refresh_interval<0)return showToast('刷新间隔必须是非负整数','error');
   if(isNaN(account_concurrency)||account_concurrency<0)return showToast('账号并发必须是非负整数（0 = 不限）','error');
-  const payload={quota_refresh_interval,account_concurrency};
+  const claim_round_interval=parseInt(document.getElementById('claim-round-interval').value,10);
+  if(isNaN(claim_round_interval)||claim_round_interval<0)return showToast('自动领取轮间隔必须是非负整数（0 = 关闭）','error');
+  const payload={quota_refresh_interval,account_concurrency,claim_round_interval};
   if(!_isSecretMask(admin_key)) payload.admin_key=admin_key;
   if(!_isSecretMask(gateway_key)) payload.gateway_key=gateway_key;
   try{

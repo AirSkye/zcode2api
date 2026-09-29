@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import logs, settings
 from .captcha import captcha_manager
+from .claim import claim_round
 from .quota import monitor
 from .routes import admin_api, gateway, pages
 
@@ -112,6 +113,7 @@ async def lifespan(app: FastAPI):
         logs.ok("install", f"存量账号补配安装身份 ×{installed}")
     monitor.start()
     captcha_manager.start()   # 验证码预解池后台补充
+    claim_round.start()       # 套餐自动领取轮（间隔 0 = 关闭）
     _run_install_sequence_on_start()
     base = f"http://{_display_host()}:{settings.PORT}"
     logs.banner([
@@ -123,6 +125,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await monitor.stop()
+        await claim_round.stop()
         await captcha_manager.close()
 
 
