@@ -41,17 +41,23 @@ USAGE_PATH = "/usage"
 OAUTH_CLI_INIT_PATH = "/api/v1/oauth/cli/init"
 OAUTH_CLI_POLL_PATH = "/api/v1/oauth/cli/poll"   # + /{flow_id}
 
-# ── 客户端版本（单一真相源：asar 客户端 3.11.2，旧版 3.10.2 已随官方升级）────
+# ── 客户端版本（单一真相源：官方客户端 3.14.3，构建 2026-09-22）────────────────
 # 客户端 claim 头实测缺版本/平台头 → 上游 3007；client/configs 带 platform 参数 → 3001
-CLIENT_APP_VERSION = "3.11.2"
+# 出处：本机官方 ZCode.exe ProductVersion=3.14.3.7762；app.asar 内置常量
+# var rS="3.14.3" / package.json "version":"3.14.3" / buildTime 2026-09-22T03:05:10Z。
+# zcode-switch 在 Windows 上经 `zcode_app_version()` 读注册表本机真实版去打
+# billing（官方升版即自动跟进）；hub 跑 Linux 无注册表，钉此常量为唯一真相源。
+# ⚠️ 上游疑似按客户端版本门槛投放活动套餐：钉旧版（3.11.2）时 preview 恒空，
+# 跟进官方现行版后恢复——发现 preview 为空时优先核对此常量是否落后于官方。
+CLIENT_APP_VERSION = "3.14.3"
 CLIENT_PLATFORM = "darwin-arm64"  # asar TH() = process.platform-arch，服务端固定伪装
 CLIENT_CONFIGS_URL = f"{ZCODE_ORIGIN}/api/v1/client/configs"
 CLIENT_CONFIGS_QUERY = f"app_version={CLIENT_APP_VERSION}"
 
 # ── billing 族版本 / 激活上报（zcode-switch v1.5.4 实证，2026-09-06 移植）─────
 # billing 族（preview/claim/balance/current/usage/configs/event）用官方桌面端
-# 现行版 3.11.2（对齐官方客户端现行版本）
-BILLING_APP_VERSION = "3.11.2"
+# 现行版（对齐 zcode-switch Windows 路径读到的本机真实版；hub 钉常量，见上）
+BILLING_APP_VERSION = "3.14.3"
 BILLING_TITLE = "Z Code@electron"        # zcode-switch billing 头实证形态
 BILLING_RELEASE_CHANNEL = "stable"
 # 官方客户端每日活跃事件：POST /api/v1/event/report（不在 zcode-plan 下、无
