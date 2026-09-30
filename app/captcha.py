@@ -1,7 +1,9 @@
 """验证码求解 + 预解 token 池。
 
-通过 Node 子进程在 happy-dom 模拟浏览器环境中运行阿里云无痕 SDK，
-求得 verifyParam（X-Aliyun-Captcha-Verify-Param）。
+主求解器 solver_pw.js：真浏览器（puppeteer-core + 系统 Chromium）运行阿里云
+官方无痕 SDK 求 verifyParam（X-Aliyun-Captcha-Verify-Param）——阿里云无痕
+验证信任真实浏览器环境，happy-dom 伪造路线 2026-09 起被风控「unusual
+activity」全拒（solver.js 仅作 ZCODE_CAPTCHA_SOLVER=legacy 回滚）。
 
 架构对齐 zapi captcha.ts 的预解池设计：
 - 热路径永不等待：请求到来时直接从池里取一枚已解好的 token（亚毫秒），
@@ -15,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 import httpx
@@ -22,7 +25,7 @@ import httpx
 from . import constants, logs, settings
 from .store import store
 
-# 池参数（对齐 zapi：min 20-40 / max 120 过重，单账号网关用小池足矣）
+# 池参数：真浏览器求解重（10–40s/枚），默认 min1/max2 见 settings 注释
 POOL_MIN = settings.CAPTCHA_POOL_MIN
 POOL_MAX = settings.CAPTCHA_POOL_MAX
 TOKEN_TTL_MS = settings.CAPTCHA_TOKEN_TTL  # 单枚 token 的最大可用时长（ms）
@@ -230,6 +233,7 @@ class CaptchaManager:
             cwd=str(settings.CAPTCHA_SOLVER_DIR),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            env={**os.environ, "ZCODE_CHROMIUM_PATH": str(settings.CHROMIUM_PATH)},
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=settings.CAPTCHA_SOLVE_TIMEOUT)

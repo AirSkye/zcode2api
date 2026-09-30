@@ -1,11 +1,12 @@
 {
   "name": "zcode2api-captcha-solver",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "无浏览器阿里云无痕验证求解器（Node + happy-dom 模拟浏览器环境，对齐 zapi captcha-happy 设计）",
+  "description": "阿里云无痕验证求解器：真浏览器（puppeteer-core + 系统 Chromium 跑官方 SDK，对齐 zcode-switch captcha.js）为主，happy-dom 模拟环境路线仅作回滚（solver.js，2026-09 起被风控全拒）",
   "type": "commonjs",
-  "main": "solver.js",
+  "main": "solver_pw.js",
   "dependencies": {
-    "happy-dom": "^20.14.0"
+    "happy-dom": "^20.14.0",
+    "puppeteer-core": "^23.0.0"
   }
 }
