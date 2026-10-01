@@ -228,13 +228,10 @@ class CaptchaManager:
             raise RuntimeError(
                 f"未找到求解器 {solver}，请先在 captcha_node 下执行 npm install"
             )
-        # 强制直连求解：token 求解出口必须与 billing/claim 一致（claim 已改直连，
-        # 见 _billing_request 注释）；剥离代理变量后 chrome 不带 --proxy-server，
-        # 出口确定，不受 hub env 的 US 代理影响。
+        # 沙箱无直连出口（直连 o.alicdn.com 超时），求解器必须走代理才能加载
+        # 阿里云验证码 SDK。保留环境代理变量，chrome 经 --proxy-server 出站。
+        # （原“强制直连”逻辑适用于有直连出口的盒子，在沙箱上不适用。）
         solver_env = {**os.environ, "ZCODE_CHROMIUM_PATH": str(settings.CHROMIUM_PATH)}
-        for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-                    "ALL_PROXY", "all_proxy"):
-            solver_env.pop(key, None)
         proc = await asyncio.create_subprocess_exec(
             settings.NODE_PATH, str(solver), scene, region, prefix,
             cwd=str(settings.CAPTCHA_SOLVER_DIR),
