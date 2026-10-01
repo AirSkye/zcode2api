@@ -134,8 +134,10 @@ function oomWatchdog(pid) {
     process.stderr.write("[pw] 未找到可执行 Chromium（设 ZCODE_CHROMIUM_PATH）\n");
     process.exit(3);
   }
-  const proxy = process.env.ZCODE_CAPTCHA_PROXY
-    || "http://127.0.0.1:18888"; // 本地转发代理（captcha-fwd-proxy.service），免认证
+  // 代理选择：ZCODE_CAPTCHA_PROXY 优先；未设置则直连。
+  // 沙箱无直连出口，需设 ZCODE_CAPTCHA_PROXY=http://127.0.0.1:18888 走本地转发；
+  // 有直连出口的盒子不设即直连。
+  const proxy = process.env.ZCODE_CAPTCHA_PROXY || "";
 
   // --single-process 在共享小内存盒上约有一半概率闪退/启动失败（好坏窗口交替，
   // 与代理无关；dmesg 实证是 OOM killer 按 chrome 自设的 adj=800 优先杀它）。
