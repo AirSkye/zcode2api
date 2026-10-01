@@ -752,8 +752,7 @@ async def proxy_assign(account_id: str):
 
 
 @router.post("/accounts/{account_id}/proxy/rotate")
-async def proxy_rotate(account_id: str):
-    """从代理池给账号换一个不同的有效代理（旧的回池）。"""
+async def proxy_rotate(account_id: str):    """从代理池给账号换一个不同的有效代理（旧的回池）。"""
     from ..proxypool import load_pool, pool_stats
     from ..proxyutil import normalize_proxy, mask_proxy
 
@@ -778,6 +777,18 @@ async def proxy_rotate(account_id: str):
             store.update_account(acc)
             return {"ok": True, "proxy": mask_proxy(cand), "pool": pool_stats()}
     raise HTTPException(409, "没有可更换的空闲代理")
+
+
+@router.post("/accounts/{account_id}/claim-proxy")
+async def set_claim_proxy(account_id: str, payload: dict = Body(...)):
+    """设置该账号领取是否走代理：{"enabled": true/false}，默认 true（走代理）。"""
+    acc = store.get_account(account_id)
+    if acc is None:
+        raise HTTPException(404, "账号不存在")
+    enabled = bool(payload.get("enabled", True))
+    acc.claim_via_proxy = enabled
+    store.update_account(acc)
+    return {"ok": True, "claim_via_proxy": enabled}
 
 
 @router.delete("/accounts/{account_id}/proxy")

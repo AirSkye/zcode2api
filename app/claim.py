@@ -133,8 +133,9 @@ async def _billing_request(account: Account, method: str, path: str, **kwargs) -
     try:
         # billing 全家桶默认直连。实测「解码直连 + claim 直连」才能过
         # 上游风控（claim 走 US 出口被拒「unusual activity」，直连 code:0）。
-        # 注意：这里故意不传 account，不走账号代理；模型调用（gateway）才走账号代理做 IP 隔离。
-        async with upstream_client(None, timeout=25, trust_env=False) as client:
+        # 但按账号开关 claim_via_proxy 决定：True（默认）走账号代理，False 直连。
+        _acc = account if getattr(account, "claim_via_proxy", True) else None
+        async with upstream_client(_acc, timeout=25, trust_env=False) as client:
             res = await client.request(
                 method, f"{settings.ZCODE_BILLING_BASE}{path}",
                 headers=headers, **kwargs,

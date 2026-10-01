@@ -63,6 +63,8 @@ class Account:
     proxy: str | None = None
     # 最近一次代理出口探测：{"ip": 出口IP, "ok": bool, "ms": 耗时毫秒, "at": epoch秒, "error": str}
     proxy_egress: dict | None = None
+    # 领取是否走账号代理：True=走代理（默认），False=直连
+    claim_via_proxy: bool = True
 
     @staticmethod
     def create(provider: str, name: str, secret: str) -> Account:
@@ -217,6 +219,7 @@ class Account:
             "installed_at": self.installed_at,
             "proxy": self.proxy_masked(),
             "proxy_egress": self.proxy_egress,
+            "claim_via_proxy": self.claim_via_proxy,
         }
 
     def proxy_masked(self) -> str | None:

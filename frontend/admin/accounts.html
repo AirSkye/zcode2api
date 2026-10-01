@@ -437,6 +437,10 @@ function proxyCell(a){
       <button class="px-btn" onclick="openProxyModal('${a.id}')">手动填</button>
       <button class="px-btn px-btn-danger" onclick="clearProxy('${a.id}')" title="清空代理，恢复默认出口">清除</button>
     </div>
+    <div class="px-claim-toggle" title="领取套餐时是否走该账号代理">
+      <label class="switch switch-sm"><input type="checkbox" ${a.claim_via_proxy!==false?'checked':''} onchange="toggleClaimProxy('${a.id}',this.checked)"><span class="switch-slider"></span></label>
+      <span class="px-claim-label">领取走代理</span>
+    </div>
   </div>`;
 }
 
@@ -460,6 +464,14 @@ async function rotateProxy(id,btn){
     load(true);
   }catch(e){showToast('更换失败: '+e.message,'error');}
   finally{if(btn){btn.textContent=old;btn.disabled=false;}}
+}
+
+async function toggleClaimProxy(id,enabled){
+  try{
+    await api('POST',`/accounts/${id}/claim-proxy`,{enabled});
+    showToast(enabled?'领取将走该账号代理':'领取将直连（不走代理）','success');
+    load(true);
+  }catch(e){showToast('设置失败: '+e.message,'error');load(true);}
 }
 
 function openProxyModal(id){

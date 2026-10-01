@@ -313,3 +313,8 @@ select.input option{background:var(--panel);color:var(--ink)}
   .mon-grid-agg > :nth-child(n+6){display:none}
   .mon-search{width:100%}
 }
+
+/* 领取走代理开关 */
+.px-claim-toggle{display:flex;align-items:center;gap:6px;margin-top:6px}
+.px-claim-label{font-size:12px;color:#666}
+.switch-sm{transform:scale(.8);transform-origin:left center}
