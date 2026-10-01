@@ -130,7 +130,10 @@ def parse_plan(raw: dict) -> dict | None:
 async def _billing_request(account: Account, method: str, path: str, **kwargs) -> dict:
     headers = dict(kwargs.pop("headers"))
     try:
-        async with httpx.AsyncClient(timeout=25) as client:
+        # trust_env=False：billing 全家桶直连。实测「解码直连 + claim 直连」才能过
+        # 上游风控（claim 走 US 出口被拒「unusual activity」，直连 code:0）；
+        # messages 端点与此相反（直连曾被 3012 风控），仍走 env 的 US 代理。
+        async with httpx.AsyncClient(timeout=25, trust_env=False) as client:
             res = await client.request(
                 method, f"{settings.ZCODE_BILLING_BASE}{path}",
                 headers=headers, **kwargs,
