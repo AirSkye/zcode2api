@@ -752,7 +752,8 @@ async def proxy_assign(account_id: str):
 
 
 @router.post("/accounts/{account_id}/proxy/rotate")
-async def proxy_rotate(account_id: str):    """从代理池给账号换一个不同的有效代理（旧的回池）。"""
+async def proxy_rotate(account_id: str):
+    """从代理池给账号换一个不同的有效代理（旧的回池）。"""
     from ..proxypool import load_pool, pool_stats
     from ..proxyutil import normalize_proxy, mask_proxy
 
