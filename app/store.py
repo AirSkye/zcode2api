@@ -261,8 +261,11 @@ class Store:
             account.enabled = enabled
             if not enabled:
                 account.status = Status.DISABLED
-            elif account.status == Status.DISABLED:
+            elif account.status in (Status.DISABLED, Status.COOLING):
+                # 人工启用 = 确认恢复：禁用洗回 active；冷却中启用视为跳过等待
+                #（风控退避本就是自动恢复语义，人工提前放行同样成立）
                 account.status = Status.ACTIVE
+                account.cooling_until = None
             self._persist_account(account)
             return True
 

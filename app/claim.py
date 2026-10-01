@@ -436,6 +436,7 @@ class ClaimRoundManager:
             if a.mode == "jwt" and a.allows_billing()
         ]
         if not accounts:
+            logs.warn("claim", "无可服务账号（全部禁用/冷却/失效），本轮跳过")
             return
         now_ms = time.time() * 1000
         # 退避表先清过期项（next_at 已过的恢复本轮重试）

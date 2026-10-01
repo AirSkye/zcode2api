@@ -124,13 +124,14 @@ class TestAccountStateMachine:
         assert not acc.allows_billing()
         assert acc.uses_plan_channel() is False
 
-    def test_risk_disabled_jwt_selectable_via_apikey(self):
+    def test_risk_cooling_jwt_not_selectable(self):
+        """风控冷却期整号不可选（即使有 Key 回退；同请求回退由 force_fallback 保证）。"""
         acc = self._acc()
         acc.api_key = "sk-fallback"
-        acc.ban_for_risk()
-        assert acc.status == Status.DISABLED
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+        assert acc.status == Status.COOLING
         assert acc.enabled is True
-        assert acc.is_selectable()
+        assert not acc.is_selectable()
         assert not acc.allows_billing()
 
     def test_manual_disable_never_selectable(self):
@@ -289,12 +290,21 @@ class TestBillingBlockReason:
         assert "停用" in msg
         assert "重新授权" not in msg
 
-    def test_risk_disabled(self):
+    def test_risk_cooling(self):
         from app.claim import billing_block_reason
         acc = Account.create("zai", "t", "a.b.c")
-        acc.ban_for_risk()
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
         msg = billing_block_reason(acc) or ""
-        assert "风控" in msg
+        assert "冷却" in msg
+        assert "重新授权" not in msg
+
+    def test_risk_disabled_after_strikes(self):
+        from app.claim import billing_block_reason
+        acc = Account.create("zai", "t", "a.b.c")
+        for _ in range(4):
+            acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+        msg = billing_block_reason(acc) or ""
+        assert "风控封禁" in msg
         assert "重新授权" not in msg
 
 

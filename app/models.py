@@ -76,16 +76,22 @@ class Account:
     def secret(self) -> str | None:
         return self.jwt_token if self.mode == "jwt" else self.api_key
 
-    def ban_for_risk(self) -> None:
-        """命中真风控（3012/405「unusual activity」）：禁用账号，UI 展示封禁文案。
+    def risk_penalty(self, base: float, cap: float, ban_strikes: int) -> None:
+        """命中风控（3012/405「unusual activity」）：指数退避冷却，累计
+        ban_strikes 次才升级为禁用（人工确认恢复）。
 
-        风控由人工确认恢复后在后台手动启用（set_enabled）——不做自动退避恢复，
-        避免对真封禁的账号持续产生上游流量。Plan 通道停用；同账号若有
-        API Key 仍可走回退通道（is_selectable / uses_plan_channel 分离）。
+        实测（2026-10-01）上游对 messages 端点的 3012 是频道级瞬时频控：
+        同号同刻 billing 全部正常、数小时自愈——硬禁用会让健康的 billing/claim
+        陪葬（领取轮两度因此停摆）。冷却自动恢复且冷却期零上游流量
+        （is_cooling 全通道门禁），既避免对真封禁账号持续施压，也不拖死领取轮。
         """
         self.risk_strikes += 1
-        self.status = Status.DISABLED
-        self.cooling_until = None
+        if self.risk_strikes >= ban_strikes:
+            self.status = Status.DISABLED
+            self.cooling_until = None
+            return
+        self.status = Status.COOLING
+        self.cooling_until = time.time() + min(base * (2 ** (self.risk_strikes - 1)), cap)
 
     def has_apikey_fallback(self) -> bool:
         """同账号是否持有可走 api.z.ai 的 API Key（JWT 死后的对话回退）。

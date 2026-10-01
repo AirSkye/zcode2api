@@ -3,8 +3,8 @@
   - 429 频控：账号**不冷却**，原地等待重试（默认 5 次；上游 Retry-After 优先、
     封顶 RETRY_429_WAIT_MAX），耗尽后换下一个账号，账号保持可用
   - 5xx 等一般错误：重试（默认 3 次），耗尽后账号冷却 COOLING_SECONDS 并换号
-  - 3012/405「unusual activity」真风控：**直接禁用账号**（UI 展示封禁文案），
-    人工确认恢复后手动启用，不做自动退避——避免对封禁账号持续产生上游流量
+  - 3012/405「unusual activity」：指数退避冷却（base 900s × 2^(strikes-1)，封顶 24h）；
+    累计 4 次升级为 DISABLED（人工确认恢复），避免持续向上游产生流量
   - 冷却期内零上游流量：monitor 跳过、后台手动路径跳过、验证码池关门
 """
 
@@ -124,7 +124,7 @@ class TestRiskControlBan:
         assert paths.count("/api/anthropic/v1/messages") == 1
 
     async def test_3012_falls_back_to_apikey_same_request(self, gateway_client, fresh_app):
-        """真风控封禁 JWT 后，同一次请求切 API Key，不 503。"""
+        """真风控后进入冷却，同一次请求切 API Key 回退，不 503。"""
         client, mock = gateway_client
         from tests.conftest import seed_account
 
@@ -135,14 +135,16 @@ class TestRiskControlBan:
 
         res = await client.post("/v1/messages", json=_MSG_BODY)
         assert res.status_code == 200
-        assert acc.status == Status.DISABLED
-        assert acc.is_selectable() is True
+        assert acc.status == Status.COOLING
+        assert acc.risk_strikes == 1
+        assert acc.is_selectable() is False  # 冷却中不可选，但已在本次请求中
+        assert acc.cooling_until is not None
         paths = [c[1] for c in mock.state.calls if c[1].endswith("/messages")]
         assert "/api/v1/zcode-plan/anthropic/v1/messages" in paths
         assert "/api/anthropic/v1/messages" in paths
 
     async def test_pure_apikey_3012_not_selectable(self, gateway_client, fresh_app):
-        """纯 API Key 账号 3012 后不得再被选中（主键不是 fallback）。"""
+        """纯 API Key 账号 3012 后进入冷却，冷却中不可选。"""
         client, mock = gateway_client
         from tests.conftest import seed_account
 
@@ -153,7 +155,8 @@ class TestRiskControlBan:
         res = await client.post("/v1/messages", json=_MSG_BODY)
         assert res.status_code == 503
         after = fresh_app.find("zai", acc.id)
-        assert after.status == Status.DISABLED
+        assert after.status == Status.COOLING
+        assert after.risk_strikes == 1
         assert after.is_selectable() is False
         assert fresh_app.select("zai") is None
 
@@ -185,13 +188,14 @@ class TestRiskControlBan:
 
         accounts = {a.name: a for a in fresh_app.list_accounts("zai")}
         risk = accounts["a-risk"]
-        assert risk.status == Status.DISABLED
-        assert risk.enabled is True  # 便于后台一键重新启用
+        assert risk.status == Status.COOLING
+        assert risk.enabled is True
         assert risk.risk_strikes == 1
-        assert risk.cooling_until is None
-        assert "风控封禁" in (risk.last_error or "")
+        assert risk.cooling_until is not None
+        assert 890 < risk.cooling_until - time.time() <= 905  # ≈ 900s
+        assert "指数退避" in (risk.last_error or "")
         assert risk.is_selectable() is False
-        assert risk.is_cooling() is False  # 封禁不是冷却，不计恢复倒计时
+        assert risk.is_cooling() is True  # 冷却中有恢复倒计时
 
     async def test_ban_recoverable_by_manual_enable(self, gateway_client, fresh_app):
         client, mock = gateway_client
@@ -201,12 +205,20 @@ class TestRiskControlBan:
         mock.state.sequences[_RISK_JWT[:16]] = ["risk_control_3012"]
 
         res = await client.post("/v1/messages", json=_MSG_BODY)
-        assert res.status_code == 503  # 唯一账号被封 → 不空转
-        assert acc.status == Status.DISABLED
+        assert res.status_code == 503  # 唯一账号被冷却 → 不空转
+        assert acc.status == Status.COOLING
 
         fresh_app.set_enabled("zai", acc.id, True)  # 人工确认恢复后启用
         assert acc.status == Status.ACTIVE
         assert acc.is_selectable() is True
+        assert acc.risk_strikes == 1  # 人工启用不清 strikes（仅成功请求清零）
+
+        # 冷却窗口结束后清除状态模拟自然恢复，再次请求应成功
+        acc.risk_strikes = 0
+        fresh_app.update_account(acc)
+        mock.state.sequences[_RISK_JWT[:16]] = ["ok"]
+        res2 = await client.post("/v1/messages", json=_MSG_BODY)
+        assert res2.status_code == 200
 
     async def test_repeated_bans_accumulate(self, gateway_client, fresh_app):
         client, mock = gateway_client
@@ -221,6 +233,7 @@ class TestRiskControlBan:
         await client.post("/v1/messages", json=_MSG_BODY)
         assert acc.risk_strikes == 2
         assert "第 2 次" in (acc.last_error or "")
+        assert "指数退避" in (acc.last_error or "")  # 第 2 次仍未升级禁用
 
 
 @pytest.mark.integration

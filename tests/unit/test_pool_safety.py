@@ -23,23 +23,35 @@ class TestDeletedAccountNotResurrected:
         assert [a.id for a in reloaded.list_accounts("zai")] == []
 
 
-class TestPureApiKeyRiskBan:
-    def test_pure_apikey_not_selectable_after_risk_ban(self):
+class TestPureApiKeyRiskCooldown:
+    def test_pure_apikey_not_selectable_during_risk_cooldown(self):
         acc = Account.create("zai", "t", "sk-pure-api-key")
         assert acc.mode == "apiKey"
         assert acc.has_apikey_fallback() is False
-        acc.ban_for_risk()
-        assert acc.status == Status.DISABLED
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+        assert acc.status == Status.COOLING
+        assert acc.risk_strikes == 1
         assert acc.enabled is True
         assert acc.is_selectable() is False
+        assert acc.cooling_until is not None
 
-    def test_jwt_with_key_still_selectable_after_risk_ban(self):
+    def test_jwt_with_key_cooldown_not_selectable(self):
         acc = Account.create("zai", "t", "a.b.c")
         acc.api_key = "sk-fallback"
-        acc.ban_for_risk()
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
         assert acc.has_apikey_fallback() is True
-        assert acc.is_selectable() is True
+        # 冷却期整号不可选（若可选，网关会重打 Plan 通道，风控计数持续累加）；
+        # 同请求内的 Key 回退由 force_fallback 保证，不依赖 is_selectable。
+        assert acc.is_selectable() is False
         assert acc.allows_billing() is False
+
+    def test_risk_cooldown_escalates_to_disabled_at_4th_strike(self):
+        acc = Account.create("zai", "t", "jwt.token")
+        for strike in range(1, 5):
+            acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+            assert acc.risk_strikes == strike
+        assert acc.status == Status.DISABLED
+        assert acc.is_selectable() is False
 
     def test_pure_apikey_invalid_not_selectable(self):
         acc = Account.create("zai", "t", "sk-dead-key")

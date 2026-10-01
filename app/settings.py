@@ -92,6 +92,12 @@ RETRY_5XX_TIMES = _int("ZCODE_RETRY_5XX_TIMES", 3)       # 5xx 重试次数
 RETRY_5XX_WAIT = _int("ZCODE_RETRY_5XX_WAIT", 5)         # 5xx 重试等待秒数
 # 限流（cooling）冷却时长（秒）——仅 5xx 重试耗尽 / 连接失败使用
 COOLING_SECONDS = _int("ZCODE_COOLING_SECONDS", 300)
+# 风控（3012/405「unusual activity」）指数退避冷却：实测为频道级瞬时频控
+#（同号同刻 billing 正常、数小时自愈），冷却自动恢复；累计 RISK_BAN_STRIKES
+# 次才升级为禁用（人工恢复）。冷却期零上游流量（is_cooling 全通道门禁）。
+RISK_COOLDOWN_BASE = _int("ZCODE_RISK_COOLDOWN_BASE", 900)    # 首次冷却秒数
+RISK_COOLDOWN_MAX = _int("ZCODE_RISK_COOLDOWN_MAX", 86400)    # 冷却上限（24h）
+RISK_BAN_STRIKES = _int("ZCODE_RISK_BAN_STRIKES", 4)          # 累计命中达到即禁用
 # 单账号并发上限（0 = 不限）。默认 2；运行期可在后台设置改（meta 表即时生效）
 ACCOUNT_CONCURRENCY = _int("ZCODE_ACCOUNT_CONCURRENCY", 2)
 # 套餐自动领取轮间隔（秒）：周期对全部可打 billing 的 JWT 账号轮一遍
