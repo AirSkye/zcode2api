@@ -198,6 +198,10 @@ class Store:
                         return a
         return None
 
+    def get_account(self, account_id: str) -> Account | None:
+        """按 id 取账号（跨 provider）。"""
+        return self.find_any(account_id)
+
     def _find_locked(self, provider: str, id_or_name: str) -> Account | None:
         for a in self._accounts.get(provider, []):
             if a.id == id_or_name or a.name == id_or_name:

@@ -25,6 +25,7 @@ from ..models import PROVIDERS, Status
 from ..oauth import ZaiAuthFlow
 from ..quota import fetch_quota, refresh_accounts
 from ..store import store
+from ..proxypool import auto_assign_new_accounts, pool_stats
 
 router = APIRouter(prefix="/admin/api", dependencies=[Depends(verify_admin_key)])
 
@@ -709,11 +710,55 @@ async def import_accounts(payload: dict = Body(...)):
     count = store.import_accounts(payload)
     # 导入的新账号：安装序（幂等）+ JWT 账号激活+自动领取（幂等：重复 token 不新增）
     imported = [a for a in store.list_accounts("zai") if a.id not in existing]
+    # 新账号自动一号一代理分配（池耗尽则保持直连）
+    auto_assign_new_accounts(imported)
     for acc in imported:
         _schedule_install(acc)
         if acc.mode == "jwt":
             _schedule_auto_claim(acc)
     return {"count": count}
+
+
+# ── 代理池 ───────────────────────────────────────────────────────────────────
+@router.get("/proxypool")
+async def proxypool_status():
+    return pool_stats()
+
+
+@router.post("/proxypool/reload")
+async def proxypool_reload():
+    from ..proxypool import load_pool
+
+    pool = load_pool(force=True)
+    return {"total": len(pool), **pool_stats()}
+
+
+@router.post("/accounts/{account_id}/proxy/assign")
+async def proxy_assign(account_id: str):
+    """给指定账号分配一个空闲代理（覆盖原有）。"""
+    from ..proxypool import assign_proxy
+
+    acc = store.get_account(account_id)
+    if acc is None:
+        raise HTTPException(404, "账号不存在")
+    url = assign_proxy(acc)
+    if url is None:
+        raise HTTPException(409, "代理池已耗尽或未加载")
+    from ..proxyutil import mask_proxy
+
+    return {"ok": True, "proxy": mask_proxy(url)}
+
+
+@router.delete("/accounts/{account_id}/proxy")
+async def proxy_unassign(account_id: str):
+    """清除账号代理（回到默认直连），代理回池。"""
+    acc = store.get_account(account_id)
+    if acc is None:
+        raise HTTPException(404, "账号不存在")
+    acc.proxy = None
+    acc.proxy_egress = None
+    store.update_account(acc)
+    return {"ok": True}
 
 
 # ── 请求监控 ─────────────────────────────────────────────────────────────────
