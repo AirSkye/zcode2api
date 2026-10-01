@@ -14,6 +14,7 @@ import httpx
 
 from . import constants, logs, settings
 from .models import Account, Status
+from .proxyutil import upstream_client
 from .store import store
 
 _DEVICE_MID: str | None = None
@@ -116,7 +117,7 @@ async def fetch_quota(account: Account) -> dict:
     base = settings.ZCODE_BILLING_BASE
     result: dict = {}
 
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with upstream_client(account, timeout=20) as client:
         async def _get(path: str):
             try:
                 return await client.get(f"{base}{path}", headers=headers)

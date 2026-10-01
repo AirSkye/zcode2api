@@ -145,6 +145,96 @@ async def set_enabled(account_id: str, payload: dict = Body(...)):
     return {"ok": True}
 
 
+# ── 按账号代理（一号一代理）────────────────────────────────────────────────────
+@router.post("/accounts/{account_id}/proxy")
+async def set_account_proxy(account_id: str, payload: dict = Body(...)):
+    """设置 / 清空账号的上游出口代理。
+
+    body: {"proxy": "http://user:pass@host:port"}；空字符串则清空（恢复默认直连）。
+    """
+    from ..proxyutil import normalize_proxy
+
+    acc = store.find_any(account_id)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    raw = (payload.get("proxy") or "").strip()
+    if raw:
+        proxy = normalize_proxy(raw)
+        if not proxy:
+            raise HTTPException(400, "代理格式非法，应为 http(s)://[user:pass@]host:port")
+        acc.proxy = proxy
+    else:
+        acc.proxy = None
+        acc.proxy_egress = None
+    store.update_account(acc)
+    return {"ok": True, "proxy": acc.proxy_masked()}
+
+
+@router.post("/accounts/{account_id}/proxy/test")
+async def test_account_proxy(account_id: str, payload: dict = Body(default=None)):
+    """测试账号代理连通性（走 HTTPS CONNECT，贴近 Z.AI 实际调用）。
+
+    body 可选 {"proxy": "..."} 测一个尚未保存的值；不带则测账号已保存的代理。
+    成功时把出口 IP 回写到账号 proxy_egress，前端直接展示。
+    """
+    from ..proxyutil import normalize_proxy, test_proxy
+
+    acc = store.find_any(account_id)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    payload = payload or {}
+    raw = (payload.get("proxy") or "").strip() or (acc.proxy or "")
+    result = await test_proxy(raw, timeout=20.0)
+    if result["ok"] and not (payload.get("proxy") or "").strip():
+        # 测的是已保存代理：回写出口快照
+        import time as _time
+
+        acc.proxy_egress = {
+            "ip": result["egress_ip"],
+            "ok": True,
+            "ms": result["ms"],
+            "at": _time.time(),
+        }
+        store.update_account(acc)
+    elif not result["ok"] and not (payload.get("proxy") or "").strip():
+        import time as _time
+
+        acc.proxy_egress = {
+            "ip": None,
+            "ok": False,
+            "ms": result["ms"],
+            "at": _time.time(),
+            "error": result["error"],
+        }
+        store.update_account(acc)
+    return result
+
+
+@router.post("/accounts/proxies/batch")
+async def batch_assign_proxies(payload: dict = Body(...)):
+    """批量给账号分配代理。
+
+    body: {"proxies": ["http://u:p@h:port", ...], "account_ids": [...可选...]}
+    不带 account_ids 时分配给全部已启用账号；按顺序轮询分配（proxies[i % n]）。
+    返回 {"ok": True, "assigned": n}。
+    """
+    from ..proxyutil import normalize_proxy
+
+    raw_list = payload.get("proxies") or []
+    proxies = [p for p in (normalize_proxy(x) for x in raw_list) if p]
+    if not proxies:
+        raise HTTPException(400, "proxies 为空或格式全部非法")
+    ids = payload.get("account_ids")
+    if ids:
+        accounts = [a for a in (store.find_any(i) for i in ids) if a]
+    else:
+        accounts = [a for a in store.list_accounts() if a.enabled]
+    for i, acc in enumerate(accounts):
+        acc.proxy = proxies[i % len(proxies)]
+        store.update_account(acc)
+    return {"ok": True, "assigned": len(accounts)}
+
+
 # ── 客户端指纹（每账号独立设备档案）──────────────────────────────────────────
 @router.post("/accounts/{account_id}/fingerprint/rotate")
 async def rotate_fingerprint(account_id: str):

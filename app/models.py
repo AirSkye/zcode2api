@@ -59,6 +59,10 @@ class Account:
     # 安装身份：入池分配的稳定安装令牌（hub 内部，跨账号不重复，导出时剥离）
     install_id: str | None = None
     installed_at: float | None = None  # 按账号安装序完成时间；None = 未安装
+    # 上游出口代理（一号一代理）：http://user:pass@host:port；None/空 = 默认行为（直连或 env）
+    proxy: str | None = None
+    # 最近一次代理出口探测：{"ip": 出口IP, "ok": bool, "ms": 耗时毫秒, "at": epoch秒, "error": str}
+    proxy_egress: dict | None = None
 
     @staticmethod
     def create(provider: str, name: str, secret: str) -> Account:
@@ -211,7 +215,16 @@ class Account:
             "fingerprint": self.fingerprint_view(),
             "install_id": self.install_id,
             "installed_at": self.installed_at,
+            "proxy": self.proxy_masked(),
+            "proxy_egress": self.proxy_egress,
         }
+
+    def proxy_masked(self) -> str | None:
+        """代理的对外形态：只暴露 host:port，绝不带密码。"""
+        from .proxyutil import mask_proxy
+
+        p = (self.proxy or "").strip()
+        return mask_proxy(p) if p else None
 
     def effective_status(self, now: float | None = None) -> str:
         """考虑冷却到期后的实时状态。"""

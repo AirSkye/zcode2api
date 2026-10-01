@@ -34,6 +34,10 @@
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/></svg>
         一键领取
       </button>
+      <button onclick="openBatchProxy()" class="page-action-btn" title="按顺序轮询给已启用账号分配代理">
+        <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+        分配代理
+      </button>
       <button onclick="openAdd()" class="page-action-btn page-action-btn-primary">
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         新增
@@ -138,6 +142,39 @@
     <div class="dialog-actions">
       <button onclick="closeModal('modal-edit')" class="dialog-btn">取消</button>
       <button onclick="doEdit()" class="dialog-btn dialog-btn-primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 设置代理弹窗 -->
+<div class="modal-overlay" id="modal-proxy">
+  <div class="modal">
+    <div class="modal-title">设置代理</div>
+    <div class="dialog-body">
+      <input type="hidden" id="proxy-edit-id">
+      <div class="dialog-help" id="proxy-edit-cur" style="margin-bottom:8px"></div>
+      <div class="dialog-field"><span class="dialog-label">代理地址</span><input class="input" id="proxy-edit-input" placeholder="http://user:pass@host:port"></div>
+      <div class="dialog-help">该账号的全部上游请求（模型调用 / 领取 / 额度）都将走这条代理；保存后点「测试」验证连通性与出口 IP。</div>
+    </div>
+    <div class="dialog-actions">
+      <button onclick="closeModal('modal-proxy')" class="dialog-btn">取消</button>
+      <button onclick="saveProxy()" class="dialog-btn dialog-btn-primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 批量分配代理弹窗 -->
+<div class="modal-overlay" id="modal-proxy-batch">
+  <div class="modal">
+    <div class="modal-title">批量分配代理</div>
+    <div class="dialog-body">
+      <div class="dialog-help">每行一个代理（http://user:pass@host:port），按顺序轮询分配给全部已启用账号；分配后逐个点「测试」验证出口 IP。</div>
+      <textarea class="input" id="proxy-batch-input" rows="7" placeholder="http://user1:pass1@1.2.3.4:3129&#10;http://user2:pass2@5.6.7.8:3129" oninput="onBatchProxyInput()"></textarea>
+      <div class="dialog-help" id="proxy-batch-info" style="margin-top:6px"></div>
+    </div>
+    <div class="dialog-actions">
+      <button onclick="closeModal('modal-proxy-batch')" class="dialog-btn">取消</button>
+      <button onclick="doBatchProxy()" id="proxy-batch-btn" class="dialog-btn dialog-btn-primary">开始分配</button>
     </div>
   </div>
 </div>
@@ -280,7 +317,7 @@ function renderList(){
   const el=document.getElementById('acct-list');
   if(!items.length){el.innerHTML='<div class="empty-state">暂无账号，点击右上角「新增」添加</div>';return;}
   el.innerHTML=`<div class="acct-scroll"><div class="acct-table">
-    <div class="acct-head"><span>凭证 / 账号</span><span>可用状态</span><span>最近请求</span><span>历史用量</span><span>额度信息</span><span class="th-actions">操作</span></div>
+    <div class="acct-head"><span>凭证 / 账号</span><span>可用状态</span><span>最近请求</span><span>历史用量</span><span>额度信息</span><span>代理出口</span><span class="th-actions">操作</span></div>
     ${items.map(rowHtml).join('')}
   </div></div>`;
 }
@@ -372,8 +409,103 @@ function rowHtml(a){
     <div class="cell recent"><div class="recent-ts">${fmtDateSec(a.last_used_at)}</div>${tickbarHtml(a)}</div>
     <div class="cell usage">${usageCell(a)}</div>
     <div class="cell quota">${quotaCell(a)}</div>
+    <div class="cell proxy">${proxyCell(a)}</div>
     <div class="cell actions">${actionsCell(a)}</div>
   </div>`;
+}
+
+/* ── 按账号代理：出口 IP + 连通性 ── */
+function proxyCell(a){
+  const eg=a.proxy_egress||{};
+  if(!a.proxy){
+    return `<div class="proxy-none" title="未配置代理：走默认出口（billing/领取直连，模型走环境代理）">
+      <span class="px-dot na"></span><span class="quota-empty">直连</span>
+      <div><button class="px-btn" onclick="openProxyModal('${a.id}')">设置代理</button></div>
+    </div>`;
+  }
+  const dotCls=eg.ok?'ok':(eg.at?'bad':'na');
+  const dotTitle=eg.ok?`连通正常 · 出口 ${eg.ip||''} · ${eg.ms||'-'}ms`:(eg.at?('测试失败: '+(eg.error||'未知错误')):'尚未测试连通性');
+  const ipLine=eg.ok&&eg.ip
+    ?`<div class="cell-sub px-ip" title="该账号全部上游请求（模型调用 / 领取 / 额度）均经此出口">出口 ${esc(eg.ip)}${eg.ms!=null?' · '+eg.ms+'ms':''}</div>`
+    :(eg.at&&!eg.ok?`<div class="cell-sub err-line" title="${esc(eg.error||'')}">测试失败</div>`:'<div class="cell-sub">未测试</div>');
+  return `<div class="proxy-info">
+    <div class="px-host" title="${esc(a.proxy)}"><span class="px-dot ${dotCls}" title="${esc(dotTitle)}"></span><span class="tok">${esc(a.proxy)}</span></div>
+    ${ipLine}
+    <div class="px-actions">
+      <button class="px-btn" onclick="testProxy('${a.id}',this)">测试</button>
+      <button class="px-btn" onclick="openProxyModal('${a.id}')">更换</button>
+      <button class="px-btn px-btn-danger" onclick="clearProxy('${a.id}')" title="清空代理，恢复默认出口">清除</button>
+    </div>
+  </div>`;
+}
+
+async function testProxy(id,btn){
+  const old=btn?btn.textContent:'';
+  if(btn){btn.textContent='测试中…';btn.disabled=true;}
+  try{
+    const d=await api('POST',`/accounts/${id}/proxy/test`);
+    showToast(d.ok?`代理连通 · 出口 IP ${d.egress_ip} · ${d.ms}ms`:'代理测试失败: '+(d.error||'未知错误'),d.ok?'success':'error');
+    load(true);
+  }catch(e){showToast('测试失败: '+e.message,'error');}
+  finally{if(btn){btn.textContent=old;btn.disabled=false;}}
+}
+
+function openProxyModal(id){
+  const a=(allAccounts||[]).find(x=>x.id===id);
+  const cur=a&&a.proxy?a.proxy:'';
+  document.getElementById('proxy-edit-id').value=id;
+  document.getElementById('proxy-edit-input').value='';
+  document.getElementById('proxy-edit-cur').textContent=cur?('当前: '+cur):'当前未配置（直连）';
+  openModal('modal-proxy');
+}
+
+async function saveProxy(){
+  const id=document.getElementById('proxy-edit-id').value;
+  const proxy=document.getElementById('proxy-edit-input').value.trim();
+  if(!proxy)return showToast('请输入代理地址','error');
+  try{
+    const d=await api('POST',`/accounts/${id}/proxy`,{proxy});
+    closeModal('modal-proxy');
+    showToast('代理已设置: '+d.proxy,'success');
+    load(true);
+  }catch(e){showToast('设置失败: '+e.message,'error');}
+}
+
+async function clearProxy(id){
+  if(!confirm('清空该账号的代理，恢复默认出口？'))return;
+  try{
+    await api('POST',`/accounts/${id}/proxy`,{proxy:''});
+    showToast('已清空代理','success');
+    load(true);
+  }catch(e){showToast('清空失败: '+e.message,'error');}
+}
+
+/* ── 批量分配代理 ── */
+function openBatchProxy(){
+  document.getElementById('proxy-batch-input').value='';
+  document.getElementById('proxy-batch-info').textContent='';
+  openModal('modal-proxy-batch');
+}
+
+async function doBatchProxy(){
+  const list=document.getElementById('proxy-batch-input').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!list.length)return showToast('请粘贴至少一个代理地址','error');
+  const btn=document.getElementById('proxy-batch-btn');
+  btn.disabled=true;btn.textContent='分配中…';
+  try{
+    const d=await api('POST','/accounts/proxies/batch',{proxies:list});
+    closeModal('modal-proxy-batch');
+    showToast(`已给 ${d.assigned} 个账号分配代理`,'success');
+    load(true);
+  }catch(e){showToast('分配失败: '+e.message,'error');}
+  finally{btn.disabled=false;btn.textContent='开始分配';}
+  document.getElementById('proxy-batch-info').textContent='';
+}
+
+function onBatchProxyInput(){
+  const n=document.getElementById('proxy-batch-input').value.split('\n').map(s=>s.trim()).filter(Boolean).length;
+  const m=(allAccounts||[]).filter(a=>a.enabled).length;
+  document.getElementById('proxy-batch-info').textContent=n?`检测到 ${n} 个代理，将按顺序轮询分配给 ${m} 个已启用账号`:'';
 }
 
 function quotaCell(a){

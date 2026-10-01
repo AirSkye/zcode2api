@@ -22,6 +22,7 @@ import httpx
 from . import constants, logs, settings
 from .captcha import captcha_manager
 from .models import Account, Status
+from .proxyutil import upstream_client
 
 
 class ClaimError(Exception):
@@ -130,10 +131,11 @@ def parse_plan(raw: dict) -> dict | None:
 async def _billing_request(account: Account, method: str, path: str, **kwargs) -> dict:
     headers = dict(kwargs.pop("headers"))
     try:
-        # trust_env=False：billing 全家桶直连。实测「解码直连 + claim 直连」才能过
+        # trust_env=False：billing 全家桶默认直连。实测「解码直连 + claim 直连」才能过
         # 上游风控（claim 走 US 出口被拒「unusual activity」，直连 code:0）；
         # messages 端点与此相反（直连曾被 3012 风控），仍走 env 的 US 代理。
-        async with httpx.AsyncClient(timeout=25, trust_env=False) as client:
+        # 账号单独配置了代理时走该代理（upstream_client 注入），覆盖默认直连。
+        async with upstream_client(account, timeout=25, trust_env=False) as client:
             res = await client.request(
                 method, f"{settings.ZCODE_BILLING_BASE}{path}",
                 headers=headers, **kwargs,

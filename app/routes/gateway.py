@@ -21,6 +21,7 @@ from ..auth_admin import verify_gateway_key
 from ..captcha import captcha_manager
 from ..models import Account, Status
 from ..openai_compat import StreamConverter, anthropic_to_openai, openai_to_anthropic
+from ..proxyutil import upstream_client
 from ..quota import fetch_quota
 from ..store import store
 
@@ -553,7 +554,7 @@ async def _try_account(req_id, account, body, incoming_headers, port, needs_capt
             logs.warn(req_id, f"账号 {account.name} 凭证无效，切换下一个")
             return _NEXT_ACCOUNT
 
-        client = httpx.AsyncClient(timeout=httpx.Timeout(connect=30.0, read=None, write=120.0, pool=30.0))
+        client = upstream_client(account, timeout=httpx.Timeout(connect=30.0, read=None, write=120.0, pool=30.0))
         cm = client.stream("POST", url, headers=headers, content=payload)
         try:
             resp = await cm.__aenter__()
