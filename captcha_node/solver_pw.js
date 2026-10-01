@@ -98,6 +98,17 @@ function clearOomScore(pid) {
   try { fs.writeFileSync(`/proc/${pid}/oom_score_adj`, "0"); } catch { /* 尽力 */ }
 }
 
+// oom 看门狗：Chromium 启动时会自设 oom_score_adj=800（Linux 渲染进程惯例），
+// 共享小内存盒上内核一有压力就第一个杀它（dmesg 实证反复被杀）。launch 后以
+// 150ms 周期持续压回 0，让 OOM killer 转而选择真正的泄漏大户（loongcollector，
+// 其守护会自动重启）。返回停表函数。
+function oomWatchdog(pid) {
+  clearOomScore(pid);
+  const t = setInterval(() => clearOomScore(pid), 150);
+  if (t.unref) t.unref();
+  return () => clearInterval(t);
+}
+
 (async () => {
   clearOomScore(process.pid); // Chromium 继承此值
 
@@ -109,8 +120,14 @@ function clearOomScore(pid) {
   const proxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || "";
 
   // --single-process 在共享小内存盒上约有一半概率闪退/启动失败（好坏窗口交替，
-  // 与代理无关）；进程内自旋重试比让调用方换进程重试便宜得多。
+  // 与代理无关；dmesg 实证是 OOM killer 按 chrome 自设的 adj=800 优先杀它）。
+  // 进程内自旋重试 + oom 看门狗压制，比让调用方换进程重试便宜得多。
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (memAvailableMB() < 500) {
+      process.stderr.write(`[pw] 第 ${attempt}/3 次：MemAvailable < 500MB，等待后重试\n`);
+      await new Promise((r) => setTimeout(r, 8000));
+      continue;
+    }
     try {
       const param = await solveOnce(executablePath, proxy, scene, region, prefix);
       if (param && param.trim()) {
@@ -139,9 +156,8 @@ async function solveOnce(executablePath, proxy, scene, region, prefix) {
     protocolTimeout: 60_000,
     timeout: 90_000,
   });
+  const stopWatchdog = oomWatchdog(browser.process() ? browser.process().pid : process.pid);
   try {
-    if (browser.process()) clearOomScore(browser.process().pid);
-
     const page = await browser.newPage();
     await page.setUserAgent(UA, {
       architecture: "x86", bitness: "64", mobile: false, model: "",
@@ -186,6 +202,7 @@ async function solveOnce(executablePath, proxy, scene, region, prefix) {
       });
     }, scene, region, prefix);
   } finally {
+    stopWatchdog();
     try { await browser.close(); } catch { /* 退出码不受影响 */ }
   }
 }
