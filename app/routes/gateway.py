@@ -647,6 +647,18 @@ async def _try_account(req_id, account, body, incoming_headers, port, needs_capt
                 return _NEXT_ACCOUNT
 
             if status_code == 429:
+                # 1113「无余额/无资源包」是 Key 的永久状态（api.z.ai 实测秒回），
+                # 原地等待重试毫无意义，只会把客户端吊死在 RETRY_429_TIMES×WAIT 里
+                # ——快速换号/失败。
+                if "1113" in text or "insufficient balance" in text.lower():
+                    account.record_result(False, "429 1113 无余额（Key 无资源包，永久态）")
+                    logs.warn(req_id, f"账号 {account.name} 429 为 1113 无余额，跳过等待重试")
+                    if needs_captcha and account.has_apikey_fallback():
+                        needs_captcha = False
+                        force_fallback = True
+                        retries_429 = 0
+                        continue
+                    return _NEXT_ACCOUNT
                 # 频控不是账号故障：不冷却，原地等一等再试，耗尽后换号且账号保持可用。
                 # Plan 通道耗尽 ≠ Key 回退也耗尽：同账号切回退并归还该通道的重试预算
                 #（与上方 3012/401/403 切回退同一语义）
