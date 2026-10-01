@@ -72,8 +72,9 @@ CAPTCHA_SOLVER_JS = CAPTCHA_SOLVER_DIR / (
 # Chromium 可执行文件（solver_pw.js 用；env 可覆盖，缺省按常见路径探测）
 CHROMIUM_PATH = os.getenv("ZCODE_CHROMIUM_PATH", "/usr/local/bin/chromium")
 CAPTCHA_SOLVE_RETRIES = _int("ZCODE_CAPTCHA_RETRIES", 4)
-# 每次求解超时（秒）：真浏览器含 launch（内存压力下可 30s+）+ SDK 加载 + 无痕验证
-CAPTCHA_SOLVE_TIMEOUT = _int("ZCODE_CAPTCHA_TIMEOUT", 120)
+# 每次求解超时（秒）：真浏览器含 launch（内存压力下可 30s+）+ SDK 加载 + 无痕验证，
+# 且 solver 进程内自旋重试 3 次（约 40s×3），须容得下
+CAPTCHA_SOLVE_TIMEOUT = _int("ZCODE_CAPTCHA_TIMEOUT", 240)
 
 # ── 用量监控 ─────────────────────────────────────────────────────────────────
 # 后台自动刷新账号额度的间隔（秒）。0 表示关闭后台轮询，仅按需刷新。

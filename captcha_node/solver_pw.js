@@ -107,8 +107,30 @@ function clearOomScore(pid) {
     process.exit(3);
   }
   const proxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || "";
-  dbg(`launch ${executablePath}`);
 
+  // --single-process 在共享小内存盒上约有一半概率闪退/启动失败（好坏窗口交替，
+  // 与代理无关）；进程内自旋重试比让调用方换进程重试便宜得多。
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const param = await solveOnce(executablePath, proxy, scene, region, prefix);
+      if (param && param.trim()) {
+        console.log("VERIFY_PARAM=" + param.trim());
+        process.exit(0);
+      }
+      process.stderr.write(`[pw] 第 ${attempt}/3 次未产出 verifyParam\n`);
+    } catch (e) {
+      process.stderr.write(`[pw] 第 ${attempt}/3 次异常: ${(e && e.message) || e}\n`);
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  process.exit(4);
+})().catch((e) => {
+  process.stderr.write("[pw] ERR " + (e && e.message) + "\n");
+  process.exit(5);
+});
+
+async function solveOnce(executablePath, proxy, scene, region, prefix) {
+  dbg(`launch ${executablePath}`);
   const browser = await puppeteer.launch({
     executablePath,
     headless: true,
@@ -135,7 +157,7 @@ function clearOomScore(pid) {
     await page.waitForFunction("typeof window.initAliyunCaptcha === 'function'", { timeout: 20_000 });
     dbg("SDK ready");
 
-    const param = await page.evaluate(async (scene, region, prefix) => {
+    return await page.evaluate(async (scene, region, prefix) => {
       window.AliyunCaptchaConfig = { region, prefix };
       return await new Promise((resolve) => {
         let done = false;
@@ -163,17 +185,7 @@ function clearOomScore(pid) {
         setTimeout(() => finish(null), 20_000);
       });
     }, scene, region, prefix);
-
-    if (param && param.trim()) {
-      console.log("VERIFY_PARAM=" + param.trim());
-      process.exit(0);
-    }
-    process.stderr.write("[pw] 无痕验证未产出 verifyParam\n");
-    process.exit(4);
   } finally {
     try { await browser.close(); } catch { /* 退出码不受影响 */ }
   }
-})().catch((e) => {
-  process.stderr.write("[pw] ERR " + (e && e.message) + "\n");
-  process.exit(5);
-});
+}
