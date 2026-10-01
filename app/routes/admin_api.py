@@ -91,6 +91,8 @@ async def add_accounts(payload: dict = Body(...)):
     # 真新增（id 不在加号前的集合里；重复 token 返回旧账号自动跳过）
     new_accounts = [a for a in store.list_accounts(provider)
                     if a.id in added and a.id not in existing]
+    # 新账号自动一号一代理分配（池耗尽则保持直连）
+    auto_assign_new_accounts(new_accounts)
     for acc in new_accounts:
         _schedule_install(acc)  # 按账号安装序（含 apiKey 账号，幂等）
         if acc.mode == "jwt":
@@ -747,6 +749,35 @@ async def proxy_assign(account_id: str):
     from ..proxyutil import mask_proxy
 
     return {"ok": True, "proxy": mask_proxy(url)}
+
+
+@router.post("/accounts/{account_id}/proxy/rotate")
+async def proxy_rotate(account_id: str):
+    """从代理池给账号换一个不同的有效代理（旧的回池）。"""
+    from ..proxypool import load_pool, pool_stats
+    from ..proxyutil import normalize_proxy, mask_proxy
+
+    acc = store.get_account(account_id)
+    if acc is None:
+        raise HTTPException(404, "账号不存在")
+    pool = load_pool()
+    if not pool:
+        raise HTTPException(409, "代理池未加载")
+    current = normalize_proxy(getattr(acc, "proxy", None))
+    used = set()
+    for a in store.list_accounts():
+        p = normalize_proxy(getattr(a, "proxy", None))
+        if p:
+            used.add(p)
+    # 找一个既空闲又和当前不同的
+    for cand in pool:
+        c = normalize_proxy(cand)
+        if c and c not in used and c != current:
+            acc.proxy = cand
+            acc.proxy_egress = None
+            store.update_account(acc)
+            return {"ok": True, "proxy": mask_proxy(cand), "pool": pool_stats()}
+    raise HTTPException(409, "没有可更换的空闲代理")
 
 
 @router.delete("/accounts/{account_id}/proxy")

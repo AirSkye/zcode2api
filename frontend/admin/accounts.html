@@ -433,7 +433,8 @@ function proxyCell(a){
     ${ipLine}
     <div class="px-actions">
       <button class="px-btn" onclick="testProxy('${a.id}',this)">测试</button>
-      <button class="px-btn" onclick="openProxyModal('${a.id}')">更换</button>
+      <button class="px-btn" onclick="rotateProxy('${a.id}',this)" title="从代理池换一个不同的有效代理">换一个</button>
+      <button class="px-btn" onclick="openProxyModal('${a.id}')">手动填</button>
       <button class="px-btn px-btn-danger" onclick="clearProxy('${a.id}')" title="清空代理，恢复默认出口">清除</button>
     </div>
   </div>`;
@@ -447,6 +448,17 @@ async function testProxy(id,btn){
     showToast(d.ok?`代理连通 · 出口 IP ${d.egress_ip} · ${d.ms}ms`:'代理测试失败: '+(d.error||'未知错误'),d.ok?'success':'error');
     load(true);
   }catch(e){showToast('测试失败: '+e.message,'error');}
+  finally{if(btn){btn.textContent=old;btn.disabled=false;}}
+}
+
+async function rotateProxy(id,btn){
+  const old=btn?btn.textContent:'';
+  if(btn){btn.textContent='更换中…';btn.disabled=true;}
+  try{
+    const d=await api('POST',`/accounts/${id}/proxy/rotate`);
+    showToast(`已换为 ${d.proxy}`,'success');
+    load(true);
+  }catch(e){showToast('更换失败: '+e.message,'error');}
   finally{if(btn){btn.textContent=old;btn.disabled=false;}}
 }
 
