@@ -82,15 +82,32 @@ function chromeArgs(proxy) {
     "--disable-blink-features=AutomationControlled",
     "--disable-features=site-per-process",
     "--lang=zh-CN",
-    "--single-process", "--no-zygote", "--renderer-process-limit=1",
+    "--no-zygote", "--renderer-process-limit=1",
     "--disable-gpu", "--disable-software-rasterizer", "--disable-extensions",
     "--disable-background-networking", "--disable-default-apps",
     "--disable-component-update", "--disable-sync", "--no-first-run",
     "--memory-pressure-off", "--disable-background-timer-throttling",
     "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
   ];
-  if (proxy) args.push("--proxy-server=" + proxy);
+  // --proxy-server 不接受 user:pass@（会报 ERR_NO_SUPPORTED_PROXIES），
+  // 只传 host:port；认证走 page.authenticate()。
+  if (proxy) {
+    try {
+      const u = new URL(proxy);
+      args.push("--proxy-server=" + u.host);
+    } catch { args.push("--proxy-server=" + proxy); }
+  }
   return args;
+}
+
+// 从代理 URL 提取认证信息（user:pass@ 形式），供 page.authenticate() 用
+function proxyAuth(proxy) {
+  if (!proxy) return null;
+  try {
+    const u = new URL(proxy);
+    if (u.username) return { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) };
+  } catch { /* ignore */ }
+  return null;
 }
 
 // oom_score_adj 归零（尽力而为；失败不影响求解）
@@ -117,7 +134,8 @@ function oomWatchdog(pid) {
     process.stderr.write("[pw] 未找到可执行 Chromium（设 ZCODE_CHROMIUM_PATH）\n");
     process.exit(3);
   }
-  const proxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || "";
+  const proxy = process.env.ZCODE_CAPTCHA_PROXY
+    || "http://127.0.0.1:18888"; // 本地转发代理（captcha-fwd-proxy.service），免认证
 
   // --single-process 在共享小内存盒上约有一半概率闪退/启动失败（好坏窗口交替，
   // 与代理无关；dmesg 实证是 OOM killer 按 chrome 自设的 adj=800 优先杀它）。
@@ -159,6 +177,8 @@ async function solveOnce(executablePath, proxy, scene, region, prefix) {
   const stopWatchdog = oomWatchdog(browser.process() ? browser.process().pid : process.pid);
   try {
     const page = await browser.newPage();
+    const auth = proxyAuth(proxy);
+    if (auth) await page.authenticate(auth);
     await page.setUserAgent(UA, {
       architecture: "x86", bitness: "64", mobile: false, model: "",
       platform: "Windows", platformVersion: "10.0.0", wow64: false,
