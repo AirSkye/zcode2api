@@ -100,7 +100,9 @@ COOLING_SECONDS = _int("ZCODE_COOLING_SECONDS", 300)
 # 次才升级为禁用（人工恢复）。冷却期零上游流量（is_cooling 全通道门禁）。
 RISK_COOLDOWN_BASE = _int("ZCODE_RISK_COOLDOWN_BASE", 900)    # 首次冷却秒数
 RISK_COOLDOWN_MAX = _int("ZCODE_RISK_COOLDOWN_MAX", 86400)    # 冷却上限（24h）
-RISK_BAN_STRIKES = _int("ZCODE_RISK_BAN_STRIKES", 4)          # 累计命中达到即禁用
+RISK_BAN_STRIKES = _int("ZCODE_RISK_BAN_STRIKES", 4)          # 窗口内累计命中达到即禁用
+RISK_STRIKE_DECAY_SECONDS = _int("ZCODE_RISK_STRIKE_DECAY_SECONDS", 7 * 86400)
+# 距上次风控命中超过该窗口则 strikes 重新起算：跨月偶发命中不累积成禁用
 # 单账号并发上限（0 = 不限）。默认 2；运行期可在后台设置改（meta 表即时生效）
 ACCOUNT_CONCURRENCY = _int("ZCODE_ACCOUNT_CONCURRENCY", 2)
 # 套餐自动领取轮间隔（秒）：周期对全部可打 billing 的 JWT 账号轮一遍
@@ -128,7 +130,7 @@ OAUTH_API_BASE = os.getenv("ZCODE_OAUTH_API_BASE", constants.ZCODE_ORIGIN + "/ap
 ZAI_EXCHANGE_ORIGIN = os.getenv("ZCODE_EXCHANGE_ORIGIN", constants.ZAI_API_ORIGIN)
 
 USER_AGENT = os.getenv("UPSTREAM_USER_AGENT", constants.USER_AGENT)
-APP_VERSION = "2.6.5"
+APP_VERSION = "2.6.6"
 
 _FRONTEND_VERSION_FILE = FRONTEND_DIR / "version"
 

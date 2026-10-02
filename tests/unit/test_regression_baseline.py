@@ -128,7 +128,7 @@ class TestAccountStateMachine:
         """风控冷却期整号不可选（即使有 Key 回退；同请求回退由 force_fallback 保证）。"""
         acc = self._acc()
         acc.api_key = "sk-fallback"
-        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
         assert acc.status == Status.COOLING
         assert acc.enabled is True
         assert not acc.is_selectable()
@@ -293,7 +293,7 @@ class TestBillingBlockReason:
     def test_risk_cooling(self):
         from app.claim import billing_block_reason
         acc = Account.create("zai", "t", "a.b.c")
-        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
         msg = billing_block_reason(acc) or ""
         assert "冷却" in msg
         assert "重新授权" not in msg
@@ -302,7 +302,7 @@ class TestBillingBlockReason:
         from app.claim import billing_block_reason
         acc = Account.create("zai", "t", "a.b.c")
         for _ in range(4):
-            acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+            acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
         msg = billing_block_reason(acc) or ""
         assert "风控封禁" in msg
         assert "重新授权" not in msg

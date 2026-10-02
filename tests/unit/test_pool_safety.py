@@ -28,7 +28,7 @@ class TestPureApiKeyRiskCooldown:
         acc = Account.create("zai", "t", "sk-pure-api-key")
         assert acc.mode == "apiKey"
         assert acc.has_apikey_fallback() is False
-        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
         assert acc.status == Status.COOLING
         assert acc.risk_strikes == 1
         assert acc.enabled is True
@@ -38,7 +38,7 @@ class TestPureApiKeyRiskCooldown:
     def test_jwt_with_key_cooldown_not_selectable(self):
         acc = Account.create("zai", "t", "a.b.c")
         acc.api_key = "sk-fallback"
-        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
         assert acc.has_apikey_fallback() is True
         # 冷却期整号不可选（若可选，网关会重打 Plan 通道，风控计数持续累加）；
         # 同请求内的 Key 回退由 force_fallback 保证，不依赖 is_selectable。
@@ -48,10 +48,29 @@ class TestPureApiKeyRiskCooldown:
     def test_risk_cooldown_escalates_to_disabled_at_4th_strike(self):
         acc = Account.create("zai", "t", "jwt.token")
         for strike in range(1, 5):
-            acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4)
+            acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
             assert acc.risk_strikes == strike
         assert acc.status == Status.DISABLED
         assert acc.is_selectable() is False
+
+    def test_risk_strikes_accumulate_within_decay_window(self):
+        import time as _time
+        acc = Account.create("zai", "t", "jwt.token")
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
+        acc.last_risk_at = _time.time() - 60  # 窗口内（1 分钟前）
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
+        assert acc.risk_strikes == 2  # 窗口内累计
+
+    def test_risk_strikes_decay_after_window(self):
+        import time as _time
+        acc = Account.create("zai", "t", "jwt.token")
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
+        assert acc.risk_strikes == 2
+        acc.last_risk_at = _time.time() - 8 * 86400  # 超出 7 天衰减窗口
+        acc.risk_penalty(base=900.0, cap=86400.0, ban_strikes=4, decay_seconds=7 * 86400)
+        assert acc.risk_strikes == 1  # 跨窗口视为新事件，重新起算
+        assert acc.status == Status.COOLING  # 一次命中不升级禁用
 
     def test_pure_apikey_invalid_not_selectable(self):
         acc = Account.create("zai", "t", "sk-dead-key")

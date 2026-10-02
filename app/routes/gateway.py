@@ -594,7 +594,7 @@ async def _try_account(req_id, account, body, incoming_headers, port, needs_capt
                 account.record_result(False, f"风控 HTTP {status_code}（3012/unusual activity）")
                 account.risk_penalty(
                     settings.RISK_COOLDOWN_BASE, settings.RISK_COOLDOWN_MAX,
-                    settings.RISK_BAN_STRIKES,
+                    settings.RISK_BAN_STRIKES, settings.RISK_STRIKE_DECAY_SECONDS,
                 )
                 if account.status == Status.DISABLED:
                     account.last_error = (
@@ -760,6 +760,7 @@ async def _try_account(req_id, account, body, incoming_headers, port, needs_capt
         # Plan 通道成功即证明恢复，全量清理（清风控计数）。
         if account.status not in (Status.INVALID, Status.DISABLED) and not account.is_cooling():
             account.risk_strikes = 0
+            account.last_risk_at = None
             account.last_error = None
             account.cooling_until = None
             if account.status in (Status.COOLING, Status.EXHAUSTED):

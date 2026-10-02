@@ -46,7 +46,8 @@ class Account:
 
     use_count: int = 0
     fail_count: int = 0
-    risk_strikes: int = 0  # 累计风控封禁次数（3012/405）；成功即清零
+    risk_strikes: int = 0  # 当前风控退避周期内累计命中次数；成功或跨衰减窗口即清零
+    last_risk_at: float | None = None  # 最近一次风控命中时间（strikes 衰减窗口基准）
     recent_results: list = field(default_factory=list)  # 最近请求结果 tick（True 成功/False 失败），最新在末尾
     last_used_at: float | None = None
     last_checked_at: float | None = None
@@ -76,7 +77,8 @@ class Account:
     def secret(self) -> str | None:
         return self.jwt_token if self.mode == "jwt" else self.api_key
 
-    def risk_penalty(self, base: float, cap: float, ban_strikes: int) -> None:
+    def risk_penalty(self, base: float, cap: float, ban_strikes: int,
+                     decay_seconds: float) -> None:
         """命中风控（3012/405「unusual activity」）：指数退避冷却，累计
         ban_strikes 次才升级为禁用（人工确认恢复）。
 
@@ -84,14 +86,22 @@ class Account:
         同号同刻 billing 全部正常、数小时自愈——硬禁用会让健康的 billing/claim
         陪葬（领取轮两度因此停摆）。冷却自动恢复且冷却期零上游流量
         （is_cooling 全通道门禁），既避免对真封禁账号持续施压，也不拖死领取轮。
+
+        strikes 仅在 decay_seconds 窗口内累计：距上次命中超过窗口视为无关的
+        新事件，重新起算——避免跨月偶发命中累积成禁用。Plan 通道成功（gateway
+        成功分支）或窗口衰减都会清零。
         """
+        now = time.time()
+        if self.last_risk_at and now - self.last_risk_at > decay_seconds:
+            self.risk_strikes = 0
         self.risk_strikes += 1
+        self.last_risk_at = now
         if self.risk_strikes >= ban_strikes:
             self.status = Status.DISABLED
             self.cooling_until = None
             return
         self.status = Status.COOLING
-        self.cooling_until = time.time() + min(base * (2 ** (self.risk_strikes - 1)), cap)
+        self.cooling_until = now + min(base * (2 ** (self.risk_strikes - 1)), cap)
 
     def has_apikey_fallback(self) -> bool:
         """同账号是否持有可走 api.z.ai 的 API Key（JWT 死后的对话回退）。

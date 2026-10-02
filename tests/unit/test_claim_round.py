@@ -196,6 +196,33 @@ async def test_stop_cancels_long_tail_round(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_round_no_accounts_warns_on_state_change_only(fresh_app, monkeypatch):
+    """无可服务账号告警只在状态变化时发（2.6.6：持续故障期不逐轮刷屏）。"""
+    import app.claim as claim_module
+
+    warns: list[str] = []
+    monkeypatch.setattr(claim_module.logs, "warn", lambda tag, msg: warns.append(msg))
+
+    async def fake_round_fn(acc, skip_plan_ids=None):
+        return []
+
+    monkeypatch.setattr(claim_module, "auto_claim_all_plans", fake_round_fn)
+    manager = claim_module.ClaimRoundManager()
+
+    await manager._round()  # 空池 → 告警一次
+    await manager._round()  # 持续空 → 不刷屏
+    assert len(warns) == 1
+
+    acc = fresh_app.add_account("zai", "back", "h1.eyJzdWIiOiJhIn0.sig")
+    await manager._round()  # 恢复有号 → 重置告警状态
+    assert len(warns) == 1
+
+    fresh_app.remove_account("zai", acc.id)
+    await manager._round()  # 再次全空 → 重新告警
+    assert len(warns) == 2
+
+
+@pytest.mark.asyncio
 async def test_auto_claim_generic_exception_appends_outcome(monkeypatch):
     """非 ClaimError 异常（如验证码求解失败）也产生失败 outcome，不再只有日志。"""
     import app.claim as claim_module
@@ -222,17 +249,80 @@ async def test_auto_claim_generic_exception_appends_outcome(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_auto_claim_activation_only_when_claimable(monkeypatch):
-    """惰性激活（2.6.5 整改）：preview 无可领套餐时不发激活上报——
-    官方语义是「领取前当日活跃」，每轮空发 app_launch 是纯风险信号。"""
+async def test_activation_daily_gate_and_ordering(monkeypatch):
+    """激活上报时序（2.6.6 根因修复）：先于 preview（投放资格信号假设下，
+    「先 preview 后补上报」会形成当日 preview 恒空 → 永不激活的死锁）；
+    每号每天最多成功上报一次（官方 app_launch 节奏）。"""
     import app.claim as claim_module
     from app.models import Account
 
-    acc = Account.create("zai", "lazy", "h1.eyJzdWIiOiJhIn0.sig")
-    calls: list[str] = []
+    acc = Account.create("zai", "gate", "h1.eyJzdWIiOiJhIn0.sig")
+    order: list[str] = []
 
     async def fake_activation(a):
-        calls.append("activation")
+        order.append("activation")
+        return None
+
+    async def fake_preview(a):
+        order.append("preview")
+        return []
+
+    monkeypatch.setattr(claim_module, "report_activation_events", fake_activation)
+    monkeypatch.setattr(claim_module, "preview_plans", fake_preview)
+    monkeypatch.setattr(claim_module, "_ACTIVATION_REPORTED", {})
+
+    # 当日首轮：激活先于 preview，且结果记入去重门
+    outcomes = await claim_module.auto_claim_all_plans(acc)
+    assert outcomes == []
+    assert order == ["activation", "preview"]
+    assert claim_module._ACTIVATION_REPORTED[acc.id] == claim_module._today_key()
+
+    # 同日第二轮：不再上报，preview 照常（额度发现不中断）
+    order.clear()
+    outcomes = await claim_module.auto_claim_all_plans(acc)
+    assert outcomes == []
+    assert order == ["preview"]
+
+
+@pytest.mark.asyncio
+async def test_activation_failure_retries_next_round(monkeypatch):
+    """上报失败不记入去重门：下一轮重试（成功才记账），避免瞬时故障吞掉当日激活。"""
+    import app.claim as claim_module
+    from app.models import Account
+
+    acc = Account.create("zai", "retry", "h1.eyJzdWIiOiJhIn0.sig")
+    calls: list[int] = []
+
+    async def failing_activation(a):
+        calls.append(1)
+        return "上游 500"
+
+    async def fake_preview(a):
+        return []
+
+    monkeypatch.setattr(claim_module, "report_activation_events", failing_activation)
+    monkeypatch.setattr(claim_module, "preview_plans", fake_preview)
+    monkeypatch.setattr(claim_module, "_ACTIVATION_REPORTED", {})
+
+    await claim_module.auto_claim_all_plans(acc)
+    assert calls == [1]
+    assert acc.id not in claim_module._ACTIVATION_REPORTED  # 失败不记账
+
+    await claim_module.auto_claim_all_plans(acc)
+    assert calls == [1, 1]  # 下一轮重试
+
+
+@pytest.mark.asyncio
+async def test_activation_reports_again_next_day(monkeypatch):
+    """跨天重新上报（每日门按本地日期翻转）。"""
+    import app.claim as claim_module
+    from app.models import Account
+
+    acc = Account.create("zai", "daily", "h1.eyJzdWIiOiJhIn0.sig")
+    calls: list[int] = []
+
+    async def fake_activation(a):
+        calls.append(1)
         return None
 
     async def fake_preview(a):
@@ -240,10 +330,20 @@ async def test_auto_claim_activation_only_when_claimable(monkeypatch):
 
     monkeypatch.setattr(claim_module, "report_activation_events", fake_activation)
     monkeypatch.setattr(claim_module, "preview_plans", fake_preview)
+    monkeypatch.setattr(claim_module, "_ACTIVATION_REPORTED", {})
+    # 模拟昨日已上报
+    monkeypatch.setattr(
+        claim_module, "_today_key", lambda: "2026-10-01", raising=False
+    )
+    await claim_module.auto_claim_all_plans(acc)
+    assert calls == [1]
 
-    outcomes = await claim_module.auto_claim_all_plans(acc)
-    assert outcomes == []
-    assert calls == [], "无可领套餐不得发激活上报"
+    # 日期翻转到今天：门重新放行
+    monkeypatch.setattr(
+        claim_module, "_today_key", lambda: "2026-10-02", raising=False
+    )
+    await claim_module.auto_claim_all_plans(acc)
+    assert calls == [1, 1]
 
 
 @pytest.mark.asyncio

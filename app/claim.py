@@ -196,20 +196,44 @@ async def report_activation_events(account: Account) -> str | None:
     return None
 
 
+# 激活上报每日去重门：账号 id → 最近一次**成功**上报的本地日期。
+# 自动路径（领取轮/入池）每号每天最多成功上报一次（官方客户端 app_launch
+# 语义 = 每次启动一次；日活键上游本就按 device_mid+日期去重）。上报失败不
+# 记账，下一轮自然重试（轮间隔 3600s，故障期上限 24 次/天，自愈）。手动
+# preview 端点不走此门（用户触发 = zcode-switch claim_refresh 语义）。
+_ACTIVATION_REPORTED: dict[str, str] = {}
+
+
+def _today_key() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
 async def auto_claim_all_plans(account: Account, *, skip_plan_ids: set[str] | None = None) -> list[dict]:
-    """新账号入池自动领取：preview 先行，确有可领套餐才补激活上报并逐个领取。
+    """新账号入池自动领取：每日一次激活上报（preview 之前）→ preview → 逐个领取。
 
     入池链路的 fire-and-forget 收尾：任何失败只记日志/返回 outcome，绝不抛出
     （入池流程不受影响）。重复执行安全（上游 1003 已领取过幂等）。
     skip_plan_ids：本轮跳过领取的套餐 id（1005 名额等待期由 ClaimRoundManager
     记忆传入）；preview 仍照常执行，新套餐发现不受影响。
-    激活上报惰性化（2.6.5 整改）：官方语义是「领取前当日活跃」（zcode-switch
-    只在用户点开领取界面时上报）；无套餐可领时每轮空发 app_launch（每号每天
-    144 次）是纯风险信号——只在上报了才会去 claim 的时刻上报。
+
+    激活上报时序（2.6.6 根因修复）：上报必须先于 preview——活动投放疑似以
+    当日激活信号为资格（constants.ACTIVATION_ELEMENTS 注释、09-06 实证），
+    「先 preview 后补上报」会在新的一天形成 preview 恒空 → 永不激活的死锁。
+    频率由每日去重门控制（每号每天 1 次，官方节奏），不再每轮空发。
     """
     if not (account.mode == "jwt" and account.jwt_token):
         return []
     outcomes: list[dict] = []
+
+    if _ACTIVATION_REPORTED.get(account.id) != _today_key():
+        try:
+            err = await report_activation_events(account)
+            if err:
+                logs.warn("claim", f"账号 {account.name} 激活上报失败: {err}")
+            else:
+                _ACTIVATION_REPORTED[account.id] = _today_key()
+        except Exception as err:  # noqa: BLE001 - 激活失败不阻断领取
+            logs.warn("claim", f"账号 {account.name} 激活上报异常: {err}")
 
     try:
         plans = await preview_plans(account)
@@ -225,14 +249,6 @@ async def auto_claim_all_plans(account: Account, *, skip_plan_ids: set[str] | No
         return outcomes
 
     skip = skip_plan_ids or set()
-    if any(p["plan_id"] not in skip for p in plans):
-        try:
-            err = await report_activation_events(account)
-            if err:
-                logs.warn("claim", f"账号 {account.name} 激活上报失败: {err}")
-        except Exception as err:  # noqa: BLE001 - 激活失败不阻断领取
-            logs.warn("claim", f"账号 {account.name} 激活上报异常: {err}")
-
     skipped = 0
     for plan in plans:
         if plan["plan_id"] in skip:
@@ -406,8 +422,8 @@ async def claim(account: Account, plan_id: str | None = None) -> dict:
 class ClaimRoundManager:
     """后台周期自动领取轮（默认 1 小时，2.6.5 整改；对齐 zcode-switch 用户触发语义）。
 
-    每轮对全部可打 billing 的 JWT 账号执行 auto_claim_all_plans（preview 先行，
-    确有可领套餐才补激活上报 + 逐个领取）；冷却/停用/风控禁用/失效账号由
+    每轮对全部可打 billing 的 JWT 账号执行 auto_claim_all_plans（每日一次激活
+    上报先于 preview + 逐个领取可领套餐）；冷却/停用/风控禁用/失效账号由
     allows_billing() 先行过滤，保证「冷却期零上游 billing 流量」不变量。
     1005（今日名额用完）按服务端 next_at 退避：等待期该套餐不打 claim
     （省 captcha 求解与上游写流量），preview 照常保留新套餐发现
@@ -425,6 +441,8 @@ class ClaimRoundManager:
         self._stop = asyncio.Event()
         # 账号 → {plan_id: 名额恢复时间(ms)}：1005 退避记忆（仅轮次路径使用）
         self._claim_holds: dict[str, dict[str, int]] = {}
+        # 无可服务账号的告警只在状态变化时发（持续故障期不逐轮刷屏）
+        self._empty_warned = False
 
     async def _round(self) -> None:
         from .quota import refresh_accounts
@@ -435,8 +453,11 @@ class ClaimRoundManager:
             if a.mode == "jwt" and a.allows_billing()
         ]
         if not accounts:
-            logs.warn("claim", "无可服务账号（全部禁用/冷却/失效），本轮跳过")
+            if not self._empty_warned:
+                logs.warn("claim", "无可服务账号（全部禁用/冷却/失效），本轮跳过")
+                self._empty_warned = True
             return
+        self._empty_warned = False
         now_ms = time.time() * 1000
         # 退避表先清过期项（next_at 已过的恢复本轮重试）
         holds = {
