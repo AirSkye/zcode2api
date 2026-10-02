@@ -117,8 +117,8 @@ POST billing/claim     → 头: Bearer JWT + 验证码头 + X-Device-Mid + X-ZCo
 前置: identity.appVersion ≥ 活动要求的最低客户端版本（否则 ineligible）
 ```
 
-版本口径（单一真相源 `app/constants.py`）：`CLIENT_APP_VERSION="3.14.3"`（官方客户端
-现行版实证：ZCode.exe ProductVersion 3.14.3.7762 / app.asar 内置常量，构建 2026-09-22；
+版本口径（单一真相源 `app/constants.py`）：`CLIENT_APP_VERSION="3.14.4"`（官方客户端
+现行版实证：ZCode.exe 注册表 DisplayVersion 3.14.4（2026-10-02 本机实测；前值 3.14.3.7762，构建 2026-09-22）；
 zcode-switch Windows 路径读注册表本机真实版同值。**活动投放按最低客户端版本门槛
 （见上「前置」行），官方升版后钉旧版会 preview 恒空 ineligible——升版先改此常量**）；
 无账号路径的 `CLIENT_PLATFORM="darwin-arm64"`（asar `TH()` = `process.platform-process.arch`）。
