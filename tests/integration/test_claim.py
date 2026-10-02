@@ -109,7 +109,9 @@ class TestClaim:
         assert outcome["ok"] is True
         assert outcome["plan_id"] == "mock-claim-plan"
 
-    async def test_claim_captcha_rejected_retries_once(self, claim_env):
+    async def test_claim_captcha_rejected_gives_up(self, claim_env):
+        """3007 验证码被拒单次即止（2.6.5 整改）：拒码出池，不再换码连打——
+        每次被拒的验证都是上游风险信号，重试只会加剧标记。"""
         client, mock, stub, acc = claim_env
         mock.state.claim_scenario = "claim_captcha_fail"
         res = await client.post("/admin/api/claim",
@@ -118,8 +120,8 @@ class TestClaim:
         outcome = res.json()["outcomes"][0]
         assert outcome["ok"] is False
         assert "验证码校验失败" in outcome["message"]
-        # 3007 → 换码重试一次：求解 2 次 + invalidate 1 次
-        assert stub.solve_count == 2
+        # 单次尝试：求解 1 次 + invalidate 1 次（拒码出池）
+        assert stub.solve_count == 1
         assert stub.invalidated == 1
         assert res.json()["summary"] == {"ok": 0, "fail": 1}
 

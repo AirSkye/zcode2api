@@ -222,6 +222,31 @@ async def test_auto_claim_generic_exception_appends_outcome(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_auto_claim_activation_only_when_claimable(monkeypatch):
+    """惰性激活（2.6.5 整改）：preview 无可领套餐时不发激活上报——
+    官方语义是「领取前当日活跃」，每轮空发 app_launch 是纯风险信号。"""
+    import app.claim as claim_module
+    from app.models import Account
+
+    acc = Account.create("zai", "lazy", "h1.eyJzdWIiOiJhIn0.sig")
+    calls: list[str] = []
+
+    async def fake_activation(a):
+        calls.append("activation")
+        return None
+
+    async def fake_preview(a):
+        return []
+
+    monkeypatch.setattr(claim_module, "report_activation_events", fake_activation)
+    monkeypatch.setattr(claim_module, "preview_plans", fake_preview)
+
+    outcomes = await claim_module.auto_claim_all_plans(acc)
+    assert outcomes == []
+    assert calls == [], "无可领套餐不得发激活上报"
+
+
+@pytest.mark.asyncio
 async def test_auto_claim_skip_plan_ids_skips_claim_only(monkeypatch):
     """skip_plan_ids 只跳过领取：新套餐照常领，被跳过的不打 claim。"""
     import app.claim as claim_module

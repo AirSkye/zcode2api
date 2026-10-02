@@ -73,7 +73,7 @@ def test_identity_headers():
     # 版本值由 test_client_version_single_source 守护，这里只断言字面量口径
     assert constants.ANTHROPIC_VERSION == "2023-06-01"
     assert constants.X_ZCODE_AGENT == "glm"
-    assert constants.HTTP_REFERER == "https://zcode.z.ai/"
+    assert constants.HTTP_REFERER == "https://zcode.z.ai"
     assert constants.IDENTITY_TITLE == "Z Code@electron"
     assert constants.IDENTITY_RELEASE_CHANNEL == "stable"
     assert constants.IDENTITY_CLIENT_LANGUAGE == "zh-CN"

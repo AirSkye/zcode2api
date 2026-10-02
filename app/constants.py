@@ -96,7 +96,9 @@ ANTHROPIC_VERSION = "2023-06-01"
 USER_AGENT = f"ZCode/{CLIENT_APP_VERSION}"
 X_ZCODE_APP_VERSION = CLIENT_APP_VERSION
 X_ZCODE_AGENT = "glm"
-HTTP_REFERER = "https://zcode.z.ai/"
+# 无尾斜杠：与 zcode-switch（billing 实证形态）及本服务 billing 头统一，
+# 消除 messages/billing 通道间 Referer 形状抖动
+HTTP_REFERER = "https://zcode.z.ai"
 CAPTCHA_HEADER = "X-Aliyun-Captcha-Verify-Param"
 # region 头（zapi captcha.ts REGION_HEADER；与 PARAM 成对下发，缺失易 3007）
 CAPTCHA_REGION_HEADER = "X-Aliyun-Captcha-Verify-Region"

@@ -78,7 +78,10 @@ CAPTCHA_SOLVE_TIMEOUT = _int("ZCODE_CAPTCHA_TIMEOUT", 240)
 
 # ── 用量监控 ─────────────────────────────────────────────────────────────────
 # 后台自动刷新账号额度的间隔（秒）。0 表示关闭后台轮询，仅按需刷新。
-QUOTA_REFRESH_INTERVAL = _int("ZCODE_QUOTA_REFRESH_INTERVAL", 60)
+# 默认 1800（2.6.5 整改）：zcode-switch 参照系下额度查询是用户开界面才触发
+# （人节奏，日均几十次）；60s 轮询 ≈ 每号每天 4300+ billing 请求，是风控
+# 「unusual activity」的主信号源（vault「billing 连续查询易触发拦截」落地）。
+QUOTA_REFRESH_INTERVAL = _int("ZCODE_QUOTA_REFRESH_INTERVAL", 1800)
 # 成功对话后计费刷新的最小间隔（秒）：billing/* 连续查询易触发上游拦截，
 # 每条消息都刷是流量放大器，与 monitor 轮询共享 last_checked_at 去抖。
 BILLING_REFRESH_MIN_INTERVAL = _int("ZCODE_BILLING_REFRESH_MIN_INTERVAL", 60)
@@ -101,9 +104,11 @@ RISK_BAN_STRIKES = _int("ZCODE_RISK_BAN_STRIKES", 4)          # 累计命中达�
 # 单账号并发上限（0 = 不限）。默认 2；运行期可在后台设置改（meta 表即时生效）
 ACCOUNT_CONCURRENCY = _int("ZCODE_ACCOUNT_CONCURRENCY", 2)
 # 套餐自动领取轮间隔（秒）：周期对全部可打 billing 的 JWT 账号轮一遍
-# 激活上报 + preview + 领取（对齐 zcode-switch 10 分钟轮次）。0 = 关闭轮次，
+# preview + 领取（有可领套餐才补激活上报，见 claim.auto_claim_all_plans）。
+# 默认 3600（2.6.5 整改）：zcode-switch 参照系下 preview/领取只在用户点界面
+# 时触发；10 分钟轮次 + 每轮 app_launch 上报是标记不消退的帮凶。0 = 关闭轮次，
 # 仅入池/手动触发。运行期可在后台设置改（meta 表即时生效）
-CLAIM_ROUND_INTERVAL = _int("ZCODE_CLAIM_ROUND_INTERVAL", 600)
+CLAIM_ROUND_INTERVAL = _int("ZCODE_CLAIM_ROUND_INTERVAL", 3600)
 
 # ── 上游端点 ─────────────────────────────────────────────────────────────────
 # 上游端点：默认值统一收口在 constants.py，环境变量仅作覆盖
@@ -123,7 +128,7 @@ OAUTH_API_BASE = os.getenv("ZCODE_OAUTH_API_BASE", constants.ZCODE_ORIGIN + "/ap
 ZAI_EXCHANGE_ORIGIN = os.getenv("ZCODE_EXCHANGE_ORIGIN", constants.ZAI_API_ORIGIN)
 
 USER_AGENT = os.getenv("UPSTREAM_USER_AGENT", constants.USER_AGENT)
-APP_VERSION = "2.6.4"
+APP_VERSION = "2.6.5"
 
 _FRONTEND_VERSION_FILE = FRONTEND_DIR / "version"
 

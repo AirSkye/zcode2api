@@ -197,23 +197,19 @@ async def report_activation_events(account: Account) -> str | None:
 
 
 async def auto_claim_all_plans(account: Account, *, skip_plan_ids: set[str] | None = None) -> list[dict]:
-    """新账号入池自动领取：激活上报 + 逐个领取全部可领套餐。
+    """新账号入池自动领取：preview 先行，确有可领套餐才补激活上报并逐个领取。
 
     入池链路的 fire-and-forget 收尾：任何失败只记日志/返回 outcome，绝不抛出
     （入池流程不受影响）。重复执行安全（上游 1003 已领取过幂等）。
     skip_plan_ids：本轮跳过领取的套餐 id（1005 名额等待期由 ClaimRoundManager
     记忆传入）；preview 仍照常执行，新套餐发现不受影响。
+    激活上报惰性化（2.6.5 整改）：官方语义是「领取前当日活跃」（zcode-switch
+    只在用户点开领取界面时上报）；无套餐可领时每轮空发 app_launch（每号每天
+    144 次）是纯风险信号——只在上报了才会去 claim 的时刻上报。
     """
     if not (account.mode == "jwt" and account.jwt_token):
         return []
     outcomes: list[dict] = []
-
-    try:
-        err = await report_activation_events(account)
-        if err:
-            logs.warn("claim", f"账号 {account.name} 激活上报失败: {err}")
-    except Exception as err:  # noqa: BLE001 - 激活失败不阻断领取
-        logs.warn("claim", f"账号 {account.name} 激活上报异常: {err}")
 
     try:
         plans = await preview_plans(account)
@@ -229,6 +225,14 @@ async def auto_claim_all_plans(account: Account, *, skip_plan_ids: set[str] | No
         return outcomes
 
     skip = skip_plan_ids or set()
+    if any(p["plan_id"] not in skip for p in plans):
+        try:
+            err = await report_activation_events(account)
+            if err:
+                logs.warn("claim", f"账号 {account.name} 激活上报失败: {err}")
+        except Exception as err:  # noqa: BLE001 - 激活失败不阻断领取
+            logs.warn("claim", f"账号 {account.name} 激活上报异常: {err}")
+
     skipped = 0
     for plan in plans:
         if plan["plan_id"] in skip:
@@ -373,7 +377,8 @@ async def claim(account: Account, plan_id: str | None = None) -> dict:
     """领取套餐。plan_id 缺省时自动选优先级最高的可领套餐。
 
     返回 _claim_outcome 形态（含 server_time/starts_at/ends_at，可能为 None）；
-    3007（验证码失败）自动换码重试一次；1005 携带 next_at（名额恢复时间）。
+    1005 携带 next_at（名额恢复时间）。验证码被拒（3007）单次即止（2.6.5 整改）：
+    拒码本身就是上游风险信号，换码连打只会加剧——拒码出池，下一轮自然重试。
     """
     if not (account.mode == "jwt" and account.jwt_token):
         raise ClaimError("仅 Coding Plan (JWT) 账号支持领取")
@@ -382,33 +387,27 @@ async def claim(account: Account, plan_id: str | None = None) -> dict:
         raise ClaimError(blocked)
 
     plan_id, plan_name, grants = await _auto_pick_plan(account, plan_id)
-    last_err: ClaimError | None = None
-    for attempt in (1, 2):
-        verify_param, verify_region = await captcha_manager.get_verify_param()
-        config = await captcha_manager.fetch_config()
-        headers = _claim_headers(account, verify_param, verify_region or config.get("region"))
+    verify_param, verify_region = await captcha_manager.get_verify_param()
+    config = await captcha_manager.fetch_config()
+    headers = _claim_headers(account, verify_param, verify_region or config.get("region"))
 
-        body = await _billing_request(
-            account, "POST", "/billing/claim",
-            headers=headers, json={"plan_id": plan_id},
-        )
-        code = _business_code(body)
-        if code == 0:
-            return _claim_outcome(body, plan_id, plan_name, grants)
-        if code == 3007 and attempt == 1:
-            logs.warn("claim", f"账号 {account.name} 验证码被拒，换码重试")
-            captcha_manager.invalidate()
-            last_err = _fail_error(code, body)
-            continue
-        raise _fail_error(code, body)
-    raise last_err or ClaimError("领取失败")
+    body = await _billing_request(
+        account, "POST", "/billing/claim",
+        headers=headers, json={"plan_id": plan_id},
+    )
+    code = _business_code(body)
+    if code == 0:
+        return _claim_outcome(body, plan_id, plan_name, grants)
+    if code == 3007:
+        captcha_manager.invalidate()  # 被拒的码出池，避免下轮复用
+    raise _fail_error(code, body)
 
 
 class ClaimRoundManager:
-    """后台周期自动领取轮（对齐 zcode-switch 10 分钟轮次语义）。
+    """后台周期自动领取轮（默认 1 小时，2.6.5 整改；对齐 zcode-switch 用户触发语义）。
 
-    每轮对全部可打 billing 的 JWT 账号执行 auto_claim_all_plans（激活上报 +
-    preview + 逐个领取全部可领套餐）；冷却/停用/风控禁用/失效账号由
+    每轮对全部可打 billing 的 JWT 账号执行 auto_claim_all_plans（preview 先行，
+    确有可领套餐才补激活上报 + 逐个领取）；冷却/停用/风控禁用/失效账号由
     allows_billing() 先行过滤，保证「冷却期零上游 billing 流量」不变量。
     1005（今日名额用完）按服务端 next_at 退避：等待期该套餐不打 claim
     （省 captcha 求解与上游写流量），preview 照常保留新套餐发现
