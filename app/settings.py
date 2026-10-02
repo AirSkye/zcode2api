@@ -33,6 +33,13 @@ def _int(env_name: str, default: int) -> int:
         return default
 
 
+def _bool(env_name: str, default: bool) -> bool:
+    raw = (os.getenv(env_name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
 # ── 目录 ─────────────────────────────────────────────────────────────────────
 DATA_DIR = _resolve_path("ZCODE_DATA_DIR", "data")
 # 账号与设置持久化到本地 SQLite（与 grok2api 的 local 后端一致）
@@ -103,6 +110,9 @@ RISK_COOLDOWN_MAX = _int("ZCODE_RISK_COOLDOWN_MAX", 86400)    # 冷却上限（2
 RISK_BAN_STRIKES = _int("ZCODE_RISK_BAN_STRIKES", 4)          # 窗口内累计命中达到即禁用
 RISK_STRIKE_DECAY_SECONDS = _int("ZCODE_RISK_STRIKE_DECAY_SECONDS", 7 * 86400)
 # 距上次风控命中超过该窗口则 strikes 重新起算：跨月偶发命中不累积成禁用
+RISK_AUTO_ROTATE = _bool("ZCODE_RISK_AUTO_ROTATE", True)
+# 风控升级禁用时自动换发设备指纹（新 SKU + 新 device_mid）并后台补跑安装序
+# ——「风控后换设备重生」语义自动化，账号重新启用时即全新身份
 # 单账号并发上限（0 = 不限）。默认 2；运行期可在后台设置改（meta 表即时生效）
 ACCOUNT_CONCURRENCY = _int("ZCODE_ACCOUNT_CONCURRENCY", 2)
 # 套餐自动领取轮间隔（秒）：周期对全部可打 billing 的 JWT 账号轮一遍
@@ -130,7 +140,7 @@ OAUTH_API_BASE = os.getenv("ZCODE_OAUTH_API_BASE", constants.ZCODE_ORIGIN + "/ap
 ZAI_EXCHANGE_ORIGIN = os.getenv("ZCODE_EXCHANGE_ORIGIN", constants.ZAI_API_ORIGIN)
 
 USER_AGENT = os.getenv("UPSTREAM_USER_AGENT", constants.USER_AGENT)
-APP_VERSION = "2.6.7"
+APP_VERSION = "2.6.8"
 
 _FRONTEND_VERSION_FILE = FRONTEND_DIR / "version"
 

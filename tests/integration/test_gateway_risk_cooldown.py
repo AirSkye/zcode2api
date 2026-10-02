@@ -220,6 +220,43 @@ class TestRiskControlBan:
         assert "5xx" not in (acc.last_error or "")
         assert acc.risk_strikes == 1
 
+    async def test_risk_disable_auto_rotates_fingerprint(self, gateway_client, fresh_app, monkeypatch):
+        """风控升级禁用时自动换发设备指纹（2.6.8：「风控后换设备重生」自动化），
+        重新启用时即全新身份；RISK_AUTO_ROTATE=False 关闭。"""
+        client, mock = gateway_client
+        from app.fingerprint import profile_for
+        from tests.conftest import seed_account
+
+        monkeypatch.setattr(settings, "RISK_BAN_STRIKES", 1)
+        acc = seed_account(fresh_app, _RISK_JWT, name="a-rot")
+        old_mid = profile_for(acc).device_mid
+        fresh_app.update_account(acc)
+        mock.state.sequences[_RISK_JWT[:16]] = ["risk_control_3012"]
+
+        res = await client.post("/v1/messages", json=_MSG_BODY)
+        assert res.status_code == 503  # 唯一账号被禁用
+        after = fresh_app.find("zai", acc.id)
+        assert after.status == Status.DISABLED
+        assert profile_for(after).device_mid != old_mid  # 已换发全新设备
+
+    async def test_risk_disable_auto_rotate_can_be_disabled(self, gateway_client, fresh_app, monkeypatch):
+        client, mock = gateway_client
+        from app.fingerprint import profile_for
+        from tests.conftest import seed_account
+
+        monkeypatch.setattr(settings, "RISK_BAN_STRIKES", 1)
+        monkeypatch.setattr(settings, "RISK_AUTO_ROTATE", False)
+        acc = seed_account(fresh_app, _RISK_JWT, name="a-norot")
+        old_mid = profile_for(acc).device_mid
+        fresh_app.update_account(acc)
+        mock.state.sequences[_RISK_JWT[:16]] = ["risk_control_3012"]
+
+        res = await client.post("/v1/messages", json=_MSG_BODY)
+        assert res.status_code == 503
+        after = fresh_app.find("zai", acc.id)
+        assert after.status == Status.DISABLED
+        assert profile_for(after).device_mid == old_mid  # 未换发
+
     async def test_ban_recoverable_by_manual_enable(self, gateway_client, fresh_app):
         client, mock = gateway_client
         from tests.conftest import seed_account

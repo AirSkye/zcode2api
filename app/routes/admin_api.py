@@ -21,7 +21,6 @@ from ..claim import (
     report_activation_events,
 )
 from ..claim import claim as do_claim
-from ..install import run_install_sequence_for_account
 from ..models import PROVIDERS, Status
 from ..oauth import ZaiAuthFlow
 from ..quota import fetch_quota, refresh_accounts
@@ -397,29 +396,16 @@ def _jwt_accounts(account_ids: list[str] | None) -> list:
     return [a for a in accounts if a.mode == "jwt" and a.jwt_token]
 
 
-# 按账号安装序的后台任务引用（同 _auto_claim_tasks：事件循环只持弱引用）
-_install_tasks: set[asyncio.Task] = set()
-
-
 def _schedule_install(account) -> None:
     """入池后调度后台按账号安装序（configs + 激活事件，幂等）。
 
     不阻塞入池响应；任何账号模式都跑（apiKey 账号 user_id 退空串，同官方
     未登录安装形态）。失败不影响入池；重复调用安全（installed_at 幂等跳过）。
+    实现收口在 install.schedule_install（风控禁用自动换设备等场景共用）。
     """
+    from ..install import schedule_install
 
-    async def _job():
-        live = store.find(account.provider, account.id)
-        if live is None:
-            return
-        try:
-            await run_install_sequence_for_account(live)
-        except Exception as err:  # noqa: BLE001 - 兜底：绝不冒泡
-            logs.warn("install", f"账号 {account.name} 安装序任务异常: {err}")
-
-    task = asyncio.create_task(_job())
-    _install_tasks.add(task)
-    task.add_done_callback(_install_tasks.discard)
+    schedule_install(account)
 
 
 @router.get("/claim/preview")

@@ -151,3 +151,31 @@ async def run_install_sequence() -> dict:
         logs.ok("install", f"安装初始化完成（configs={'√' if result['configs_fetched'] else '×'}，"
                            f"events={','.join(result['events_reported']) or '无'}）")
     return result
+
+
+# 后台安装任务集合：持有强引用防 GC，完成即自行移除
+_install_tasks: set = set()
+
+
+def schedule_install(account) -> None:
+    """后台调度按账号安装序（configs + 激活事件，幂等）。
+
+    入池、指纹换发、风控禁用换设备等场景共用：不阻塞调用方；任何账号模式
+    都跑；重复调用安全（installed_at 幂等跳过）；异常全部兜住不冒泡。
+    """
+    import asyncio
+
+    async def _job():
+        from .store import store
+
+        live = store.find(account.provider, account.id)
+        if live is None:
+            return
+        try:
+            await run_install_sequence_for_account(live)
+        except Exception as err:  # noqa: BLE001 - 兜底：绝不冒泡
+            logs.warn("install", f"账号 {account.name} 安装序任务异常: {err}")
+
+    task = asyncio.create_task(_job())
+    _install_tasks.add(task)
+    task.add_done_callback(_install_tasks.discard)
