@@ -32,6 +32,8 @@ class ProxyStat:
     last_check: float = 0
     last_ms: int | None = None
     ok: bool = False
+    mitm_checked: bool = False  # 是否已通过 MITM 检测
+    mitm_bad: bool = False      # 是否检测出 MITM
 
     @property
     def avg_ms(self) -> float | None:
@@ -95,14 +97,21 @@ class ProxyHealthMonitor:
     # ---------- 检测 ----------
     async def _check_one(self, proxy: str) -> tuple[str, bool, int | None]:
         try:
-            r = await proxyutil.test_proxy(proxy, timeout=12.0)
-            # 基础 HTTPS 通了之后，再验证对 Z.AI 域名没有 MITM
-            # （有些代理只对特定域名做自签证书劫持，ipify 测不出来）
-            if r.get("ok"):
+            r = await proxyutil.test_proxy(proxy, timeout=10.0)
+            if not r.get("ok"):
+                return (proxy, False, None)
+            # MITM 检测只做一次（通过后缓存，避免每轮都测）
+            st = self.stats.get(proxy)
+            if st and not st.mitm_checked:
                 mitm = await self._check_mitm(proxy)
+                st.mitm_checked = True
+                st.mitm_bad = mitm
                 if mitm:
+                    logs.err("proxyhealth", f"代理 {proxy} 检出 MITM，已拉黑")
                     return (proxy, False, None)
-            return (proxy, bool(r.get("ok")), r.get("ms"))
+            elif st and st.mitm_bad:
+                return (proxy, False, None)
+            return (proxy, True, r.get("ms"))
         except Exception:  # noqa: BLE001
             return (proxy, False, None)
 
@@ -177,7 +186,7 @@ class ProxyHealthMonitor:
         if not accounts:
             return
         n = len(accounts)
-        ranked = [s for s in self._ranked() if s.avg_ms is not None and s.fails < FAIL_THRESHOLD]
+        ranked = [s for s in self._ranked() if s.avg_ms is not None and s.fails < FAIL_THRESHOLD and not s.mitm_bad]
         if not ranked:
             return
         top = ranked[:n]
