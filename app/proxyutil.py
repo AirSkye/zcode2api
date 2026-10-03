@@ -93,26 +93,58 @@ def upstream_client(account=None, **kwargs) -> httpx.AsyncClient:
 
 
 async def test_proxy(proxy_url: str, timeout: float = 15.0) -> dict:
-    """测试代理连通性：走 HTTPS（CONNECT 隧道，贴近 Z.AI 实际调用方式）。
+    """测试代理连通性：自动检测支持类型。
 
-    返回 {"ok", "egress_ip", "ms", "error"}。
+    先测 HTTPS（CONNECT 隧道，贴近 Z.AI 实际调用方式），
+    再测 HTTP。返回 {"ok", "egress_ip", "ms", "error",
+    "supports": {"http": bool, "https": bool}}。
+    ok 为 True 当且仅当 HTTPS 可用（zcode2api 只走 HTTPS）。
     """
     proxy = normalize_proxy(proxy_url)
     if not proxy:
         return {"ok": False, "egress_ip": None, "ms": 0,
-                "error": "代理格式非法，应为 http(s)://[user:pass@]host:port"}
+                "error": "代理格式非法，应为 http(s)://[user:pass@]host:port",
+                "supports": {"http": False, "https": False}}
+    supports = {"http": False, "https": False}
+    egress_ip, ms, err = None, 0, None
     t0 = time.time()
     try:
         async with httpx.AsyncClient(proxy=proxy, timeout=timeout,
                                      trust_env=False) as client:
-            r = await client.get("https://api.ipify.org?format=text")
-            r.raise_for_status()
-            ip = r.text.strip()
-            if not re.match(r"^[0-9a-fA-F.:]+$", ip):
-                raise ValueError(f"出口 IP 解析异常: {ip[:40]}")
+            # 1. HTTPS（决定 ok）
+            try:
+                r = await client.get("https://api.ipify.org?format=text")
+                r.raise_for_status()
+                ip = r.text.strip()
+                if re.match(r"^[0-9a-fA-F.:]+$", ip):
+                    supports["https"] = True
+                    egress_ip = ip
+            except Exception as e:  # noqa: BLE001
+                err = f"HTTPS: {type(e).__name__}: {str(e)[:80]}"
+            # 2. HTTP（仅探测支持类型）
+            try:
+                r = await client.get("http://api.ipify.org?format=text")
+                r.raise_for_status()
+                ip = r.text.strip()
+                if re.match(r"^[0-9a-fA-F.:]+$", ip):
+                    supports["http"] = True
+                    if not egress_ip:
+                        egress_ip = ip
+            except Exception:  # noqa: BLE001
+                pass
             ms = int((time.time() - t0) * 1000)
-            return {"ok": True, "egress_ip": ip, "ms": ms, "error": None}
+            if supports["https"]:
+                return {"ok": True, "egress_ip": egress_ip, "ms": ms,
+                        "error": None, "supports": supports}
+            # HTTPS 不可用：说明是哪种情况
+            if supports["http"]:
+                error = "仅支持 HTTP，不支持 HTTPS（zcode2api 需要 HTTPS）"
+            else:
+                error = err or "HTTP/HTTPS 均不可用"
+            return {"ok": False, "egress_ip": egress_ip, "ms": ms,
+                    "error": error, "supports": supports}
     except Exception as e:  # noqa: BLE001
         ms = int((time.time() - t0) * 1000)
         return {"ok": False, "egress_ip": None, "ms": ms,
-                "error": f"{type(e).__name__}: {str(e)[:120]}"}
+                "error": f"{type(e).__name__}: {str(e)[:120]}",
+                "supports": supports}

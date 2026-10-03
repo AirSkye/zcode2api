@@ -454,7 +454,8 @@ async function testProxy(id,btn,silent){
   if(btn){btn.textContent='测试中…';btn.disabled=true;}
   try{
     const d=await api('POST',`/accounts/${id}/proxy/test`);
-    if(!silent)showToast(d.ok?`代理连通 · 出口 IP ${d.egress_ip} · ${d.ms}ms`:'代理测试失败: '+(d.error||'未知错误'),d.ok?'success':'error');
+    const sup=d.supports?` [HTTP:${d.supports.http?'✓':'✗'} HTTPS:${d.supports.https?'✓':'✗'}]`:'';
+    if(!silent)showToast(d.ok?`代理连通 · 出口 IP ${d.egress_ip} · ${d.ms}ms${sup}`:'代理测试失败: '+(d.error||'未知错误')+sup,d.ok?'success':'error');
     load(true);
   }catch(e){if(!silent)showToast('测试失败: '+e.message,'error');}
   finally{if(btn){btn.textContent=old;btn.disabled=false;}}
