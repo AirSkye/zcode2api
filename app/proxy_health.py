@@ -229,10 +229,11 @@ class ProxyHealthMonitor:
                 continue
             st = self.stats.get(cur)
             # 已分配代理失效或劣化：替换
+            # 注意：st is None 表示尚未测试（比如重启后），不能判为失效，只能保持现状
             need_replace = False
-            if st is None or st.fails >= FAIL_THRESHOLD:
+            if st is not None and st.fails >= FAIL_THRESHOLD:
                 need_replace = True
-            elif cur not in top_set and top:
+            elif st is not None and cur not in top_set and top:
                 # 不在前 N：看最优未分配的是否明显更好
                 used = { (a.proxy or "").strip() for a in accounts if (a.proxy or "").strip() }
                 best_spare = next((s for s in top if s.proxy not in used), None)
