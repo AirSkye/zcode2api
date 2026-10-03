@@ -282,6 +282,12 @@ class ProxyHealthMonitor:
     # ---------- 状态查询 ----------
     def status(self) -> dict:
         ranked = self._ranked()
+        # n_candidates 取文件实际数量（包含尚未测试的新代理）
+        try:
+            with open(CANDIDATE_FILE) as f:
+                n_candidates = sum(1 for l in f if l.strip())
+        except Exception:  # noqa: BLE001
+            n_candidates = len(ranked)
         try:
             n_accounts = len(store.list_accounts())
         except Exception:  # noqa: BLE001
@@ -306,7 +312,7 @@ class ProxyHealthMonitor:
             "rounds": self.rounds,
             "last_round": self.last_round,
             "n_accounts": n_accounts,
-            "n_candidates": len(ranked),
+            "n_candidates": n_candidates,
             "rows": rows,
         }
 
