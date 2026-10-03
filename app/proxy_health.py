@@ -96,9 +96,34 @@ class ProxyHealthMonitor:
     async def _check_one(self, proxy: str) -> tuple[str, bool, int | None]:
         try:
             r = await proxyutil.test_proxy(proxy, timeout=12.0)
+            # 基础 HTTPS 通了之后，再验证对 Z.AI 域名没有 MITM
+            # （有些代理只对特定域名做自签证书劫持，ipify 测不出来）
+            if r.get("ok"):
+                mitm = await self._check_mitm(proxy)
+                if mitm:
+                    return (proxy, False, None)
             return (proxy, bool(r.get("ok")), r.get("ms"))
         except Exception:  # noqa: BLE001
             return (proxy, False, None)
+
+    async def _check_mitm(self, proxy: str) -> bool:
+        """检测代理是否对 Z.AI 域名做 MITM。返回 True 表示有劫持。"""
+        import httpx
+        try:
+            async with httpx.AsyncClient(proxy=proxy, timeout=10.0,
+                                         trust_env=False) as client:
+                # 只建连握手，不发业务请求
+                r = await client.get("https://chat.z.ai/",
+                                     follow_redirects=False)
+                # 能拿到正常响应（2xx/3xx/4xx）说明证书链没问题
+                return False
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            # 自签证书 = MITM
+            if "CERTIFICATE_VERIFY_FAILED" in msg or "self-signed" in msg:
+                return True
+            # 其他错误（超时、连接拒绝等）不算 MITM，交给普通失败计数
+            return False
 
     # 每轮最多测多少个（轮询，避免候选太多时单轮超时）
     BATCH_SIZE = 60
