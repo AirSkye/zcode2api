@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+captcha_node/node_modules/
+node_modules/
+.env
+data/
+*.log
