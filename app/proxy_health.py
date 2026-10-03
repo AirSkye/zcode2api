@@ -100,6 +100,9 @@ class ProxyHealthMonitor:
         except Exception:  # noqa: BLE001
             return (proxy, False, None)
 
+    # 每轮最多测多少个（轮询，避免候选太多时单轮超时）
+    BATCH_SIZE = 60
+
     async def _round(self) -> None:
         candidates = self.load_candidates()
         if not candidates:
@@ -108,8 +111,11 @@ class ProxyHealthMonitor:
         for p in candidates:
             if p not in self.stats:
                 self.stats[p] = ProxyStat(proxy=p)
-        # 并发检测（分批，避免一次打太多）；整轮限时 60s
-        sem = asyncio.Semaphore(20)
+        # 轮询：优先测最久没测过的
+        ordered = sorted(candidates, key=lambda p: self.stats[p].last_check)
+        batch = ordered[: self.BATCH_SIZE]
+        # 并发检测；整轮限时 60s
+        sem = asyncio.Semaphore(25)
 
         async def _guarded(proxy: str):
             async with sem:
@@ -117,7 +123,7 @@ class ProxyHealthMonitor:
 
         try:
             results = await asyncio.wait_for(
-                asyncio.gather(*[_guarded(p) for p in candidates]),
+                asyncio.gather(*[_guarded(p) for p in batch]),
                 timeout=60.0,
             )
         except TimeoutError:
