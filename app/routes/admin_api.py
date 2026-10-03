@@ -836,3 +836,44 @@ async def monitoring():
 async def monitoring_clear():
     reqlog.clear()
     return {"ok": True}
+
+
+# ── 代理健康实时监控 ─────────────────────────────────────────────────────────
+@router.get("/proxyhealth/status")
+async def proxyhealth_status():
+    """代理健康监控状态：排名、平均延迟、是否在前N。"""
+    from ..proxy_health import monitor as ph
+    return ph.status()
+
+
+@router.post("/proxyhealth/enabled")
+async def proxyhealth_enabled(payload: dict = Body(...)):
+    """开关自动优选（true/false）。"""
+    from ..proxy_health import monitor as ph
+    ph.enabled = bool(payload.get("enabled", True))
+    return {"ok": True, "enabled": ph.enabled}
+
+
+@router.get("/proxyhealth/candidates")
+async def proxyhealth_candidates():
+    from ..proxy_health import monitor as ph
+    return {"candidates": ph.load_candidates()}
+
+
+@router.post("/proxyhealth/candidates")
+async def proxyhealth_candidates_add(payload: dict = Body(...)):
+    """批量添加候选代理：{"proxies": ["http://ip:port", ...]} 或 {"text": "多行文本"}。"""
+    from ..proxy_health import monitor as ph
+    proxies: list[str] = list(payload.get("proxies") or [])
+    text = (payload.get("text") or "").strip()
+    if text:
+        proxies += [l.strip() for l in text.splitlines() if l.strip()]
+    added = ph.add_candidates(proxies)
+    return {"ok": True, "added": added, "total": len(ph.load_candidates())}
+
+
+@router.delete("/proxyhealth/candidates")
+async def proxyhealth_candidates_clear():
+    from ..proxy_health import monitor as ph
+    ph.save_candidates([])
+    return {"ok": True}

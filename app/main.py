@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from . import logs, settings
 from .captcha import captcha_manager
 from .claim import claim_round
+from .proxy_health import monitor as proxy_health_monitor
 from .quota import monitor
 from .routes import admin_api, gateway, pages
 
@@ -114,6 +115,7 @@ async def lifespan(app: FastAPI):
     monitor.start()
     captcha_manager.start()   # 验证码预解池后台补充
     claim_round.start()       # 套餐自动领取轮（间隔 0 = 关闭）
+    proxy_health_monitor.start()  # 代理健康实时监控（10s 一轮）
     _run_install_sequence_on_start()
     base = f"http://{_display_host()}:{settings.PORT}"
     logs.banner([
@@ -127,6 +129,7 @@ async def lifespan(app: FastAPI):
         await monitor.stop()
         await claim_round.stop()
         await captcha_manager.close()
+        await proxy_health_monitor.stop()
 
 
 def create_app() -> FastAPI:

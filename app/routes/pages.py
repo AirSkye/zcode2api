@@ -44,6 +44,11 @@ async def admin_accounts():
     return _html("accounts.html")
 
 
+@router.get("/admin/proxy-health", include_in_schema=False)
+async def admin_proxy_health():
+    return _html("proxy-health.html")
+
+
 @router.get("/admin/monitoring", include_in_schema=False)
 async def admin_monitoring():
     return _html("monitoring.html")

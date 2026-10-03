@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>zcode-hub · 代理监控</title>
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/static/css/app.css?v={{APP_VERSION}}" rel="stylesheet">
+  <style>
+    .ph-table{width:100%;border-collapse:collapse;font-size:13px}
+    .ph-table th{text-align:left;padding:8px 10px;color:var(--dim);font-weight:500;border-bottom:1px solid var(--line);white-space:nowrap}
+    .ph-table td{padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+    .ph-table tr.top-row td{background:rgba(110,231,183,.06)}
+    .ph-badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px}
+    .ph-badge.top{background:rgba(110,231,183,.15);color:var(--mint)}
+    .ph-badge.bad{background:rgba(248,113,113,.15);color:var(--red)}
+    .ph-badge.idle{background:rgba(148,163,184,.15);color:var(--dim)}
+    .lat-bar{height:4px;border-radius:2px;background:var(--line);margin-top:4px;min-width:80px}
+    .lat-fill{height:100%;border-radius:2px;background:var(--mint)}
+    .lat-fill.warn{background:var(--amber)}
+    .lat-fill.bad{background:var(--red)}
+  </style>
+</head>
+<body>
+<div id="admin-header" data-active="/admin/proxy-health"></div>
+
+<main class="admin-main">
+  <div class="page-hd">
+    <div>
+      <div class="page-title">代理监控</div>
+      <div class="page-sub">每 10s 检测候选 HTTPS 代理延迟 · 自动优选前 N 个（N=账号数）分配</div>
+    </div>
+    <div class="page-actions">
+      <span class="live-dot" id="live-dot">检测中</span>
+      <button class="page-action-btn" id="btn-toggle" onclick="toggleEnabled()">暂停优选</button>
+      <button class="page-action-btn" onclick="doRefresh()">刷新</button>
+    </div>
+  </div>
+
+  <div class="stat-grid" id="stat-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat-cell"><div class="stat-label">候选代理</div><div class="stat-num" id="s-candidates">—</div><div class="stat-sub">data/proxy_candidates.txt</div></div>
+    <div class="stat-cell"><div class="stat-label">账号数 / 优选数</div><div class="stat-num" id="s-accounts">—</div><div class="stat-sub">始终用延迟最低的前 N 个</div></div>
+    <div class="stat-cell"><div class="stat-label">检测轮次</div><div class="stat-num" id="s-rounds">—</div><div class="stat-sub" id="s-last-round"></div></div>
+    <div class="stat-cell"><div class="stat-label">可用 / 失效</div><div class="stat-num" id="s-health">—</div><div class="stat-sub">连续失败≥3次视为失效</div></div>
+  </div>
+
+  <div class="section-head" style="margin-top:18px">
+    <div class="section-title">批量添加候选代理</div>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:18px">
+    <textarea id="add-text" class="input" rows="3" style="flex:1;resize:vertical" placeholder="每行一个，格式 http://ip:port 或 ip:port，可粘贴多行"></textarea>
+    <button class="page-action-btn" onclick="doAdd()" style="align-self:flex-start">添加</button>
+    <button class="page-action-btn" onclick="doClear()" style="align-self:flex-start">清空候选</button>
+  </div>
+
+  <div class="section-head">
+    <div class="section-title">实时排名 <span class="section-meta" id="updated-at"></span></div>
+  </div>
+  <div style="overflow-x:auto">
+  <table class="ph-table">
+    <thead><tr>
+      <th>排名</th><th>代理</th><th>平均延迟</th><th>上次</th><th>样本</th><th>连续失败</th><th>状态</th>
+    </tr></thead>
+    <tbody id="ph-body"><tr><td colspan="7" style="text-align:center;color:var(--dim);padding:24px">加载中…</td></tr></tbody>
+  </table>
+  </div>
+</main>
+
+<script src="/static/js/auth.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/header.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/toast.js?v={{APP_VERSION}}"></script>
+<script>
+renderAdminHeader();
+let timer=null;
+
+async function doRefresh(){
+  try{
+    const d=await api('GET','/proxyhealth/status');
+    document.getElementById('s-candidates').textContent=d.n_candidates;
+    document.getElementById('s-accounts').textContent=d.n_accounts;
+    document.getElementById('s-rounds').textContent=d.rounds;
+    document.getElementById('s-last-round').textContent=d.last_round?('上轮 '+new Date(d.last_round*1000).toLocaleTimeString()):'';
+    const okN=d.rows.filter(r=>r.fails<3&&r.avg_ms!=null).length;
+    document.getElementById('s-health').textContent=okN+' / '+(d.n_candidates-okN);
+    document.getElementById('btn-toggle').textContent=d.enabled?'暂停优选':'启用优选';
+    document.getElementById('updated-at').textContent='更新于 '+new Date().toLocaleTimeString();
+    const tb=document.getElementById('ph-body');
+    if(!d.rows.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--dim);padding:24px">暂无候选代理，请在上方添加</td></tr>';return;}
+    const maxAvg=Math.max(...d.rows.map(r=>r.avg_ms||0),1);
+    tb.innerHTML=d.rows.map(r=>{
+      const badge=r.in_top?'<span class="ph-badge top">优选中</span>':(r.fails>=3?'<span class="ph-badge bad">失效</span>':'<span class="ph-badge idle">备用</span>');
+      const avg=r.avg_ms!=null?r.avg_ms+'ms':'—';
+      const cls=r.avg_ms==null?'':(r.avg_ms>3000?'bad':(r.avg_ms>1500?'warn':''));
+      const w=r.avg_ms!=null?Math.min(100,r.avg_ms/maxAvg*100):0;
+      const last=r.last_ms!=null?r.last_ms+'ms':'—';
+      return `<tr class="${r.in_top?'top-row':''}"><td>#${r.rank}</td><td style="font-family:monospace">${r.proxy_masked}</td>`+
+        `<td>${avg}<div class="lat-bar"><div class="lat-fill ${cls}" style="width:${w}%"></div></div></td>`+
+        `<td>${last}</td><td>${r.samples}</td><td>${r.fails}</td><td>${badge}</td></tr>`;
+    }).join('');
+  }catch(e){showToast('加载失败: '+e.message,'error');}
+}
+
+async function toggleEnabled(){
+  const d=await api('GET','/proxyhealth/status');
+  await api('POST','/proxyhealth/enabled',{enabled:!d.enabled});
+  doRefresh();
+}
+async function doAdd(){
+  const t=document.getElementById('add-text').value.trim();
+  if(!t)return showToast('请先粘贴代理','error');
+  const d=await api('POST','/proxyhealth/candidates',{text:t});
+  showToast(`已添加 ${d.added} 个，候选共 ${d.total} 个`,'success');
+  document.getElementById('add-text').value='';
+  doRefresh();
+}
+async function doClear(){
+  if(!confirm('清空全部候选代理？'))return;
+  await api('DELETE','/proxyhealth/candidates');
+  showToast('已清空','success');
+  doRefresh();
+}
+
+(async()=>{
+  const key=await adminKey.get();
+  if(!key||!await verifyKey(ADMIN_API+'/verify',key).catch(()=>false))return location.href='/admin/login';
+  await doRefresh();
+  timer=setInterval(doRefresh,10000);
+})();
+</script>
+</body>
+</html>

@@ -7,6 +7,7 @@ async function renderAdminHeader(){
   const active=mount.dataset.active||location.pathname;
   const nav=[
     ['/admin/accounts','账号池'],
+    ['/admin/proxy-health','代理监控'],
     ['/admin/monitoring','请求监控'],
     ['/admin/settings','设置'],
   ].map(([href,label])=>
