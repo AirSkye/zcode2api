@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from . import logs
 from . import proxyutil
-from . import store
+from .store import store
 
 
 CHECK_INTERVAL = 10.0          # 检测间隔（秒）
@@ -108,14 +108,21 @@ class ProxyHealthMonitor:
         for p in candidates:
             if p not in self.stats:
                 self.stats[p] = ProxyStat(proxy=p)
-        # 并发检测（分批，避免一次打太多）
+        # 并发检测（分批，避免一次打太多）；整轮限时 60s
         sem = asyncio.Semaphore(20)
 
         async def _guarded(proxy: str):
             async with sem:
                 return await self._check_one(proxy)
 
-        results = await asyncio.gather(*[_guarded(p) for p in candidates])
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*[_guarded(p) for p in candidates]),
+                timeout=60.0,
+            )
+        except TimeoutError:
+            logs.err("proxyhealth", "检测轮次超时（60s），跳过本轮")
+            return
         for proxy, ok, ms in results:
             self.stats[proxy].record(ok, ms)
         self.last_round = time.time()
