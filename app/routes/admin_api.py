@@ -735,6 +735,21 @@ async def proxypool_reload():
     return {"total": len(pool), **pool_stats()}
 
 
+@router.post("/proxypool/upload")
+async def proxypool_upload(payload: dict = Body(...)):
+    """上传代理清单文件内容（每行一个代理 URL），写入后自动 reload。"""
+    from .. import proxypool
+
+    content = payload.get("content") or ""
+    if not isinstance(content, str) or not content.strip():
+        raise HTTPException(400, "content 不能为空")
+    f = proxypool.pool_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(content, encoding="utf-8")
+    pool = proxypool.load_pool(force=True)
+    return {"total": len(pool), **pool_stats()}
+
+
 @router.post("/accounts/{account_id}/proxy/assign")
 async def proxy_assign(account_id: str):
     """给指定账号分配一个空闲代理（覆盖原有）。"""
