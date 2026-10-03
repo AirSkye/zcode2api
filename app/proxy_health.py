@@ -60,11 +60,58 @@ class ProxyHealthMonitor:
         self.enabled = True
         self.last_round: float = 0
         self.rounds = 0
+        self._load_stats()  # 启动时恢复磁盘数据
 
     # ---------- 候选池 ----------
     def _candidates_file(self):
         from . import settings
         return settings.DATA_DIR / "proxy_candidates.txt"
+
+    def _stats_file(self):
+        from . import settings
+        return settings.DATA_DIR / "proxy_stats.json"
+
+    def _save_stats(self):
+        """持久化测试数据到磁盘，重启不丢失。"""
+        try:
+            import json
+            data = {}
+            for p, s in self.stats.items():
+                data[p] = {
+                    "latencies": list(s.latencies),
+                    "fails": s.fails,
+                    "last_check": s.last_check,
+                    "last_ms": s.last_ms,
+                    "ok": s.ok,
+                    "mitm_checked": s.mitm_checked,
+                    "mitm_bad": s.mitm_bad,
+                }
+            with open(self._stats_file(), "w") as f:
+                json.dump(data, f)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _load_stats(self):
+        """启动时从磁盘恢复测试数据。"""
+        try:
+            import json
+            f = self._stats_file()
+            if not f.exists():
+                return
+            with open(f) as fh:
+                data = json.load(fh)
+            for p, d in data.items():
+                s = ProxyStat(proxy=p)
+                s.latencies = deque(d.get("latencies", []), maxlen=HISTORY_LEN)
+                s.fails = d.get("fails", 0)
+                s.last_check = d.get("last_check", 0)
+                s.last_ms = d.get("last_ms")
+                s.ok = d.get("ok", False)
+                s.mitm_checked = d.get("mitm_checked", False)
+                s.mitm_bad = d.get("mitm_bad", False)
+                self.stats[p] = s
+        except Exception:  # noqa: BLE001
+            pass
 
     def load_candidates(self) -> list[str]:
         f = self._candidates_file()
@@ -161,6 +208,7 @@ class ProxyHealthMonitor:
             self.stats[proxy].record(ok, ms)
         self.last_round = time.time()
         self.rounds += 1
+        self._save_stats()  # 每轮持久化
         # 检测完尝试优选替换
         await self._rebalance()
 
@@ -219,13 +267,25 @@ class ProxyHealthMonitor:
             if not cur:
                 # 没代理的账号：直接分配最优的未分配代理
                 used = { (a.proxy or "").strip() for a in accounts if (a.proxy or "").strip() }
+                assigned = False
                 for s in top:
                     if s.proxy not in used:
                         acc.proxy = s.proxy
                         acc.proxy_egress = None
                         store.update_account(acc)
                         logs.ok("proxyhealth", f"账号 {acc.id[:20]} 分配最优代理 {s.proxy}（{s.avg_ms:.0f}ms）")
+                        assigned = True
                         break
+                if not assigned:
+                    # top 为空（刚启动还没测完）：从候选文件里找个没用过的先顶上
+                    # 监控跑起来后会自动换成更优的
+                    for p in self.load_candidates():
+                        if p not in used:
+                            acc.proxy = p
+                            acc.proxy_egress = None
+                            store.update_account(acc)
+                            logs.ok("proxyhealth", f"账号 {acc.id[:20]} 暂分配代理 {p}（待优选）")
+                            break
                 continue
             st = self.stats.get(cur)
             # 已分配代理失效或劣化：替换
@@ -285,7 +345,7 @@ class ProxyHealthMonitor:
         ranked = self._ranked()
         # n_candidates 取文件实际数量（包含尚未测试的新代理）
         try:
-            with open(CANDIDATE_FILE) as f:
+            with open(self._candidates_file()) as f:
                 n_candidates = sum(1 for l in f if l.strip())
         except Exception:  # noqa: BLE001
             n_candidates = len(ranked)
