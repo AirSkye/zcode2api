@@ -378,4 +378,28 @@ class ProxyHealthMonitor:
         }
 
 
+    def assign_best_to(self, account) -> bool:
+        """给单个账号立即分配当前最优的未占用代理。返回是否成功。"""
+        # 先用内存里的优选排名
+        ranked = [s for s in self._ranked()
+                  if s.avg_ms is not None and s.fails < FAIL_THRESHOLD and not s.mitm_bad]
+        used = {(a.proxy or "").strip() for a in store.list_accounts() if (a.proxy or "").strip()}
+        for s in ranked:
+            if s.proxy not in used:
+                account.proxy = s.proxy
+                account.proxy_egress = None
+                store.update_account(account)
+                logs.ok("proxyhealth", f"新账号 {account.id[:20]} 分配最优代理 {s.proxy}（{s.avg_ms:.0f}ms）")
+                return True
+        # 内存里没有：从候选文件找个没用过的
+        for p in self.load_candidates():
+            if p not in used:
+                account.proxy = p
+                account.proxy_egress = None
+                store.update_account(account)
+                logs.ok("proxyhealth", f"新账号 {account.id[:20]} 暂分配代理 {p}（待优选）")
+                return True
+        return False
+
+
 monitor = ProxyHealthMonitor()

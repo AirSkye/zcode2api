@@ -91,8 +91,14 @@ async def add_accounts(payload: dict = Body(...)):
     # 真新增（id 不在加号前的集合里；重复 token 返回旧账号自动跳过）
     new_accounts = [a for a in store.list_accounts(provider)
                     if a.id in added and a.id not in existing]
-    # 新账号自动一号一代理分配（池耗尽则保持直连）
-    auto_assign_new_accounts(new_accounts)
+    # 新账号自动一号一代理分配（用健康监控的优选；池耗尽则保持直连）
+    try:
+        from ..proxy_health import monitor as _ph
+        for acc in new_accounts:
+            if not (acc.proxy or "").strip():
+                _ph.assign_best_to(acc)
+    except Exception:  # noqa: BLE001
+        auto_assign_new_accounts(new_accounts)  # 兜底走老池
     for acc in new_accounts:
         _schedule_install(acc)  # 按账号安装序（含 apiKey 账号，幂等）
         if acc.mode == "jwt":
