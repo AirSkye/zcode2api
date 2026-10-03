@@ -21,7 +21,7 @@ from ..auth_admin import verify_gateway_key
 from ..captcha import captcha_manager
 from ..models import Account, Status
 from ..openai_compat import StreamConverter, anthropic_to_openai, openai_to_anthropic
-from ..proxyutil import upstream_client
+from ..proxyutil import egress_ip_for, upstream_client
 from ..quota import fetch_quota
 from ..store import store
 
@@ -527,7 +527,8 @@ async def _try_account(req_id, account, body, incoming_headers, port, needs_capt
     model_name = str(body.get("model") or "-")
     while True:
         attempt_t0 = time.time()
-        reqlog.mark_account(req_id, account.name, account.mode)
+        reqlog.mark_account(req_id, account.name, account.mode,
+                            egress_ip=egress_ip_for(account) or "直连")
         verify_param = verify_region = None
         if needs_captcha:
             _park_slot(slot_box)

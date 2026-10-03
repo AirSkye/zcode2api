@@ -293,7 +293,7 @@ select.input option{background:var(--panel);color:var(--ink)}
 .mon-tab-count{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:rgba(255,255,255,.14);font-size:11px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
 .mon-tab.active .mon-tab-count{background:rgba(0,0,0,.18)}
 .mon-head,.mon-row{display:grid;gap:12px;align-items:center;padding:9px 16px}
-.mon-grid-live{grid-template-columns:120px 150px 120px 130px 64px 72px 70px 70px minmax(200px,1fr)}
+.mon-grid-live{grid-template-columns:120px 150px 130px 120px 130px 64px 72px 70px 70px minmax(200px,1fr)}
 .mon-grid-agg{grid-template-columns:minmax(140px,1.2fr) 150px 76px 64px 84px 84px 84px 130px}
 .mon-head{font-size:11px;font-weight:600;color:var(--ink-mute);letter-spacing:.04em;border-bottom:1px solid var(--hairline-soft)}
 .mon-row{border-bottom:1px solid var(--hairline-soft);font-size:12.5px;color:var(--ink-dim)}

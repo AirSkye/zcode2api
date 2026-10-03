@@ -1,9 +1,11 @@
 """按账号代理（一号一代理）。
 
 设计原则：
-- 默认不改变任何现有行为：账号没配代理时，上游客户端的创建方式与原来完全一致
-  （billing/claim 保持 trust_env=False 直连，网关保持原来的 env 行为）。
-- 账号配了代理后，该账号的所有上游请求（模型调用、领取、额度）都走这条代理。
+- 账号没配代理时，上游客户端的创建方式与原来完全一致。
+- 账号配了代理后，是否真正走代理由两级开关决定：
+  全局开关（settings.proxy_global_enabled，默认开）× 账号开关（account.proxy_enabled，默认开）。
+  任一关闭则该账号全部上游请求直连。
+- 账号开关开时，该账号的所有上游请求（模型调用、领取、额度）都走这条代理。
 """
 from __future__ import annotations
 
@@ -36,11 +38,45 @@ def mask_proxy(value: str) -> str:
     return m.group(2)
 
 
-def proxy_for(account) -> str | None:
-    """取账号配置的代理（已校验格式），未配置返回 None。"""
+def proxy_enabled_for(account) -> bool:
+    """该账号是否允许走代理：全局开关 × 账号开关（默认都开）。"""
     if account is None:
+        return False
+    if not getattr(account, "proxy_enabled", True):
+        return False
+    try:
+        from .store import store
+
+        if str(store.get_setting("proxy_global_enabled", "1")) != "1":
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def proxy_for(account) -> str | None:
+    """取账号实际生效的代理（已校验格式）；任一开关关闭或未配置返回 None。"""
+    if not proxy_enabled_for(account):
         return None
     return normalize_proxy(getattr(account, "proxy", None))
+
+
+def egress_ip_for(account) -> str | None:
+    """该账号当前请求的出口 IP（用于日志/展示）：
+
+    - 走代理：优先用最近一次探测到的出口 IP（proxy_egress），没有则退化为代理 host
+    - 直连：返回 None（调用方展示为"直连"）
+    """
+    if not proxy_enabled_for(account):
+        return None
+    proxy = normalize_proxy(getattr(account, "proxy", None))
+    if not proxy:
+        return None
+    eg = getattr(account, "proxy_egress", None) or {}
+    if eg.get("ok") and eg.get("ip"):
+        return str(eg["ip"])
+    m = _MASK_RE.match(proxy)
+    return m.group(2) if m else None
 
 
 def upstream_client(account=None, **kwargs) -> httpx.AsyncClient:

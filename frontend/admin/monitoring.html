@@ -199,11 +199,12 @@ function renderAgg(key){
 }
 
 function renderLive(){
-  const head=`<div class="mon-head mon-grid-live"><span>时间</span><span>账号</span><span>模型</span><span>状态</span><span>首字</span><span>总耗时</span><span>输入</span><span>输出</span><span>内容 / 错误</span></div>`;
+  const head=`<div class="mon-head mon-grid-live"><span>时间</span><span>账号</span><span>出口 IP</span><span>模型</span><span>状态</span><span>首字</span><span>总耗时</span><span>输入</span><span>输出</span><span>内容 / 错误</span></div>`;
   const body=filtered().slice(0,200).map(e=>`
     <div class="mon-row mon-grid-live">
       <span class="mon-time">${fmtTs(e.ts)}</span>
       <span class="mon-name" title="${esc(e.account||'')}">${esc(e.account||'—')}${e.mode?` <span class="tier-b ${e.mode==='jwt'?'jwt':'other'}">${e.mode==='jwt'?'JWT':'KEY'}</span>`:''}</span>
+      <span class="mon-model" title="${esc(e.egress_ip||'')}">${esc(e.egress_ip||'—')}</span>
       <span class="mon-model" title="${esc(e.model||'')}">${esc(e.model||'—')}</span>
       <span>${statusCell(e)}</span>
       <span class="mon-num">${fmtSec(e.t_first)}</span>

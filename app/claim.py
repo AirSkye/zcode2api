@@ -131,11 +131,11 @@ def parse_plan(raw: dict) -> dict | None:
 async def _billing_request(account: Account, method: str, path: str, **kwargs) -> dict:
     headers = dict(kwargs.pop("headers"))
     try:
-        # billing 全家桶默认直连。实测「解码直连 + claim 直连」才能过
-        # 上游风控（claim 走 US 出口被拒「unusual activity」，直连 code:0）。
-        # 但按账号开关 claim_via_proxy 决定：True（默认）走账号代理，False 直连。
-        _acc = account if getattr(account, "claim_via_proxy", True) else None
-        async with upstream_client(_acc, timeout=25, trust_env=False) as client:
+        # 是否走账号代理由两级开关统一决定（全局 proxy_global_enabled × 账号 proxy_enabled），
+        # 见 proxyutil.proxy_for：开时该账号全部上游请求（模型/领取/额度）走代理，关时全部直连。
+        # 注意：部分代理出口（如 US）曾被上游领取风控拒过（unusual activity），
+        # 若领取频繁失败可单独把该账号的「走代理」开关关掉。
+        async with upstream_client(account, timeout=25, trust_env=False) as client:
             res = await client.request(
                 method, f"{settings.ZCODE_BILLING_BASE}{path}",
                 headers=headers, **kwargs,

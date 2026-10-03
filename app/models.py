@@ -63,8 +63,9 @@ class Account:
     proxy: str | None = None
     # 最近一次代理出口探测：{"ip": 出口IP, "ok": bool, "ms": 耗时毫秒, "at": epoch秒, "error": str}
     proxy_egress: dict | None = None
-    # 领取是否走账号代理：True=走代理（默认），False=直连
-    claim_via_proxy: bool = True
+    # 账号整体是否走代理：True=该账号全部上游请求（模型调用/领取/额度）走账号代理（默认），False=全部直连
+    # 由老字段 claim_via_proxy 迁移而来（from_dict 兼容）
+    proxy_enabled: bool = True
 
     @staticmethod
     def create(provider: str, name: str, secret: str) -> Account:
@@ -172,7 +173,11 @@ class Account:
     @staticmethod
     def from_dict(data: dict) -> Account:
         known = {f for f in Account.__dataclass_fields__}  # type: ignore[attr-defined]
-        return Account(**{k: v for k, v in data.items() if k in known})
+        d = {k: v for k, v in data.items() if k in known}
+        # 老版本字段 claim_via_proxy（仅控制领取）迁移为 proxy_enabled（控制整体）
+        if "proxy_enabled" not in d and "claim_via_proxy" in data:
+            d["proxy_enabled"] = bool(data["claim_via_proxy"])
+        return Account(**d)
 
     def fingerprint_view(self) -> dict | None:
         """指纹的对外形态（dict）；未分配/半初始化返回 None。"""
@@ -219,7 +224,7 @@ class Account:
             "installed_at": self.installed_at,
             "proxy": self.proxy_masked(),
             "proxy_egress": self.proxy_egress,
-            "claim_via_proxy": self.claim_via_proxy,
+            "proxy_enabled": self.proxy_enabled,
         }
 
     def proxy_masked(self) -> str | None:

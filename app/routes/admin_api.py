@@ -657,6 +657,7 @@ async def get_settings():
         "admin_key_is_default": bool(admin_key) and admin_key == app_settings.DEFAULT_ADMIN_KEY,
         "gateway_key_set": bool(gateway_key),
         "gateway_key_masked": _mask_secret(gateway_key),
+        "proxy_global_enabled": store.proxy_global_enabled(),
         "quota_refresh_interval": store.quota_refresh_interval(),
         "account_concurrency": store.account_concurrency(),
         "claim_round_interval": store.claim_round_interval(),
@@ -679,6 +680,8 @@ async def update_settings(payload: dict = Body(...)):
             pass
         else:
             store.set_setting("gateway_key", key)
+    if "proxy_global_enabled" in payload:
+        store.set_setting("proxy_global_enabled", "1" if payload["proxy_global_enabled"] else "0")
     if "quota_refresh_interval" in payload:
         try:
             interval = max(0, int(payload["quota_refresh_interval"]))
@@ -795,16 +798,19 @@ async def proxy_rotate(account_id: str):
     raise HTTPException(409, "没有可更换的空闲代理")
 
 
-@router.post("/accounts/{account_id}/claim-proxy")
-async def set_claim_proxy(account_id: str, payload: dict = Body(...)):
-    """设置该账号领取是否走代理：{"enabled": true/false}，默认 true（走代理）。"""
+@router.post("/accounts/{account_id}/proxy-enabled")
+async def set_proxy_enabled(account_id: str, payload: dict = Body(...)):
+    """设置该账号整体是否走代理：{"enabled": true/false}，默认 true。
+
+    开：该账号全部上游请求（模型调用/领取/额度）走账号代理；
+    关：该账号全部直连。另受全局开关 proxy_global_enabled 约束。"""
     acc = store.get_account(account_id)
     if acc is None:
         raise HTTPException(404, "账号不存在")
     enabled = bool(payload.get("enabled", True))
-    acc.claim_via_proxy = enabled
+    acc.proxy_enabled = enabled
     store.update_account(acc)
-    return {"ok": True, "claim_via_proxy": enabled}
+    return {"ok": True, "proxy_enabled": enabled}
 
 
 @router.delete("/accounts/{account_id}/proxy")

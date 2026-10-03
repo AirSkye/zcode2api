@@ -159,6 +159,10 @@ class Store:
     def gateway_key(self) -> str:
         return str(self.get_setting("gateway_key", "") or "")
 
+    def proxy_global_enabled(self) -> bool:
+        """全局代理总开关：False 时所有账号一律直连（忽略账号级开关与代理配置）。"""
+        return str(self.get_setting("proxy_global_enabled", "1")) == "1"
+
     def quota_refresh_interval(self) -> int:
         try:
             return max(0, int(self.get_setting("quota_refresh_interval", settings.QUOTA_REFRESH_INTERVAL)))

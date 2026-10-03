@@ -32,6 +32,7 @@ def begin(req_id: str, endpoint: str, model: str, stream: bool, preview: str = "
         "preview": (preview or "")[:80],
         "account": "",
         "mode": "",
+        "egress_ip": "",
         "ok": None,
         "status": None,
         "error": "",
@@ -45,13 +46,14 @@ def begin(req_id: str, endpoint: str, model: str, stream: bool, preview: str = "
         _inflight[req_id] = entry
 
 
-def mark_account(req_id: str, account_name: str, mode: str) -> None:
-    """记录实际服务该请求的账号（多账号重试时最后一次生效）。"""
+def mark_account(req_id: str, account_name: str, mode: str, egress_ip: str = "") -> None:
+    """记录实际服务该请求的账号（多账号重试时最后一次生效），以及本次请求的出口 IP。"""
     with _lock:
         entry = _inflight.get(req_id)
         if entry is not None:
             entry["account"] = account_name
             entry["mode"] = mode
+            entry["egress_ip"] = egress_ip or ""
 
 
 def finish_ok(req_id: str, t_first: float | None = None,
