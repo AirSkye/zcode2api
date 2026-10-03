@@ -100,17 +100,17 @@ class ProxyHealthMonitor:
             r = await proxyutil.test_proxy(proxy, timeout=10.0)
             if not r.get("ok"):
                 return (proxy, False, None)
-            # MITM 检测只做一次（通过后缓存，避免每轮都测）
-            st = self.stats.get(proxy)
-            if st and not st.mitm_checked:
-                mitm = await self._check_mitm(proxy)
-                st.mitm_checked = True
-                st.mitm_bad = mitm
-                if mitm:
-                    logs.err("proxyhealth", f"代理 {proxy} 检出 MITM，已拉黑")
-                    return (proxy, False, None)
-            elif st and st.mitm_bad:
-                return (proxy, False, None)
+            # MITM 检测暂时禁用（会导致轮次卡死，待改为独立低频任务）
+            # st = self.stats.get(proxy)
+            # if st and not st.mitm_checked:
+            #     mitm = await self._check_mitm(proxy)
+            #     st.mitm_checked = True
+            #     st.mitm_bad = mitm
+            #     if mitm:
+            #         logs.err("proxyhealth", f"代理 {proxy} 检出 MITM，已拉黑")
+            #         return (proxy, False, None)
+            # elif st and st.mitm_bad:
+            #     return (proxy, False, None)
             return (proxy, True, r.get("ms"))
         except Exception:  # noqa: BLE001
             return (proxy, False, None)
