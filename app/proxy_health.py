@@ -100,17 +100,11 @@ class ProxyHealthMonitor:
             r = await proxyutil.test_proxy(proxy, timeout=10.0)
             if not r.get("ok"):
                 return (proxy, False, None)
-            # MITM 检测暂时禁用（会导致轮次卡死，待改为独立低频任务）
-            # st = self.stats.get(proxy)
-            # if st and not st.mitm_checked:
-            #     mitm = await self._check_mitm(proxy)
-            #     st.mitm_checked = True
-            #     st.mitm_bad = mitm
-            #     if mitm:
-            #         logs.err("proxyhealth", f"代理 {proxy} 检出 MITM，已拉黑")
-            #         return (proxy, False, None)
-            # elif st and st.mitm_bad:
-            #     return (proxy, False, None)
+            # MITM 检测：只对已通过基础测试的做，且只做一次（缓存结果）
+            # 放在 _rebalance 里按需触发，不在每轮全量检测，避免拖慢轮次
+            st = self.stats.get(proxy)
+            if st and st.mitm_bad:
+                return (proxy, False, None)
             return (proxy, True, r.get("ms"))
         except Exception:  # noqa: BLE001
             return (proxy, False, None)
@@ -168,7 +162,7 @@ class ProxyHealthMonitor:
         self.last_round = time.time()
         self.rounds += 1
         # 检测完尝试优选替换
-        self._rebalance()
+        await self._rebalance()
 
     def _ranked(self) -> list[ProxyStat]:
         """按平均延迟排序（有数据的优先，无数据的排最后）。"""
@@ -177,8 +171,12 @@ class ProxyHealthMonitor:
             return (avg is None, avg if avg is not None else 0, s.fails)
         return sorted(self.stats.values(), key=key)
 
-    def _rebalance(self) -> None:
-        """优选逻辑：始终用平均延迟最低的 N 个（N=账号数）。"""
+    async def _rebalance(self) -> None:
+        """优选逻辑：始终用平均延迟最低的 N 个（N=账号数）。
+
+        对进入前 N 候选但尚未做过 MITM 检测的，先做检测（最多同时 5 个），
+        检出 MITM 的直接拉黑不分配。
+        """
         try:
             accounts = store.list_accounts()
         except Exception:  # noqa: BLE001
@@ -190,6 +188,29 @@ class ProxyHealthMonitor:
         if not ranked:
             return
         top = ranked[:n]
+        # 对前 N 候选中尚未做过 MITM 检测的，补做检测（并发 5 个，单个 8s 超时）
+        to_check = [s for s in top if not s.mitm_checked]
+        if to_check:
+            sem = asyncio.Semaphore(5)
+
+            async def _mk(s):
+                async with sem:
+                    try:
+                        bad = await asyncio.wait_for(self._check_mitm(s.proxy), timeout=8.0)
+                    except TimeoutError:
+                        bad = False
+                    s.mitm_checked = True
+                    s.mitm_bad = bad
+                    if bad:
+                        logs.err("proxyhealth", f"代理 {s.proxy} 检出 MITM，已拉黑")
+                    return s
+
+            await asyncio.gather(*[_mk(s) for s in to_check])
+            # 剔除刚检出的 MITM，重新取前 N
+            ranked = [s for s in self._ranked() if s.avg_ms is not None and s.fails < FAIL_THRESHOLD and not s.mitm_bad]
+            if not ranked:
+                return
+            top = ranked[:n]
         top_set = {s.proxy for s in top}
 
         # 当前各账号的代理
