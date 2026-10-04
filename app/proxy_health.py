@@ -18,7 +18,7 @@ from . import proxyutil
 from .store import store
 
 
-CHECK_INTERVAL = 10.0          # 检测间隔（秒）
+CHECK_INTERVAL = 60.0          # 检测间隔（秒）：从10s改为60s，避免打爆代理商
 HISTORY_LEN = 10               # 保留最近 N 次延迟
 FAIL_THRESHOLD = 3             # 连续失败 N 次视为不可用
 REPLACE_RATIO = 1.5            # 已分配代理平均延迟超过最优未分配 1.5 倍时替换
@@ -176,7 +176,7 @@ class ProxyHealthMonitor:
             return False
 
     # 每轮最多测多少个（轮询，避免候选太多时单轮超时）
-    BATCH_SIZE = 60
+    BATCH_SIZE = 20  # 从60改为20，减少并发压力
 
     async def _round(self) -> None:
         candidates = self.load_candidates()
@@ -190,7 +190,7 @@ class ProxyHealthMonitor:
         ordered = sorted(candidates, key=lambda p: self.stats[p].last_check)
         batch = ordered[: self.BATCH_SIZE]
         # 并发检测；整轮限时 60s
-        sem = asyncio.Semaphore(25)
+        sem = asyncio.Semaphore(10)  # 从25改为10
 
         async def _guarded(proxy: str):
             async with sem:
